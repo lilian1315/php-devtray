@@ -24,7 +24,7 @@ Runtime configuration tests use simulated binaries and a controlled process runn
 
 The rendered screenshot does not establish keyboard-only, screen-reader, native-menu, multi-monitor, mixed-DPI, or Explorer-restart acceptance. Resource use and cold-open latency still need benchmarks. Actual request draining and Mailpit persistence have passed the new end-to-end tests, but broader load and failure combinations remain acceptance work.
 
-Self-contained Windows x64 publication completed successfully for both the WPF application and the independent PHP launcher. The published `LocalServerManager.exe` ran its isolated smoke mode without a system .NET installation, rendered the Settings section, cleaned up, and returned exit code 0. Both the empty PHP state and Settings captures were inspected. The complete published folder must remain together; this is a folder distribution rather than an installer.
+Self-contained Windows x64 publication completed successfully for both the WPF application and the independent PHP launcher. The published `PhpDevTray.exe` ran its isolated smoke mode without a system .NET installation, rendered the Settings section, cleaned up, and returned exit code 0. Both the empty PHP state and Settings captures were inspected. The complete published folder must remain together; this is a folder distribution rather than an installer.
 
 ## Version 0.2 verification
 

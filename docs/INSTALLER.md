@@ -1,10 +1,10 @@
 # Windows installer
 
-The Windows x64 setup is in `artifacts/installers/LocalServerManager-0.7.0-Setup-x64.exe`, with a SHA-256 sidecar.
+The Windows x64 setup is in `artifacts/installers/PhpDevTray-0.7.0-Setup-x64.exe`, with a SHA-256 sidecar.
 
-The installer runs for the current user without administrator elevation. Default program location: `%LOCALAPPDATA%\Programs\LocalServerManager`. It creates a Start menu shortcut, offers an optional desktop shortcut, and registers an uninstaller in Windows Installed apps. Launching the app after setup is optional.
+The installer runs for the current user without administrator elevation. Default program location: `%LOCALAPPDATA%\Programs\PhpDevTray`. It creates a Start menu shortcut, offers an optional desktop shortcut, and registers an uninstaller in Windows Installed apps. Launching the app after setup is optional.
 
-The full self-contained app and its CLI launcher are included. PHP, Nginx and Mailpit distributions are managed separately by the app. Existing application data remains at `%LOCALAPPDATA%\LocalServerManager`; setup does not overwrite it, and uninstall does not delete runtimes, configuration or captured email. User-enabled PHP PATH integration and its retained launcher live in that data folder and are preserved as well.
+The full self-contained app and its CLI launcher are included. PHP, Nginx and Mailpit distributions are managed separately by the app. Existing application data remains at `%LOCALAPPDATA%\PhpDevTray`; setup does not overwrite it, and uninstall does not delete runtimes, configuration or captured email. User-enabled PHP PATH integration and its retained launcher live in that data folder and are preserved as well.
 
 Exit the manager through **Exit and stop services** before installing an update or uninstalling. Setup detects the running-instance mutex and does not force termination. Closing the normal window merely hides it to the tray.
 
@@ -16,7 +16,9 @@ Publish the current app with `scripts/build.ps1 -Publish`, then run:
 .\scripts\build-installer.ps1 -CompilerPath 'C:\Path\To\Inno Setup 7\ISCC.exe'
 ```
 
-The script checks the app/CLI/notices payload and rejects a publish/source version mismatch before compiling `installer/LocalServerManager.iss`. Output version and checksum are generated automatically. No signing identity is configured: the resulting installer is unsigned.
+The script checks the app/CLI/notices payload and rejects a publish/source version mismatch before compiling `installer/PhpDevTray.iss`. Output version and checksum are generated automatically. No signing identity is configured: the resulting installer is unsigned.
+
+GitHub Actions also builds this installer on branch pushes and pull requests. The separate release workflow signs it with SignPath, publishes the signed installer and its new checksum to GitHub Releases, and submits stable releases to WinGet. See [release configuration and instructions](RELEASING.md) for the required credentials, signing policy and package metadata.
 
 For this build, the official Inno Setup 7.1.1 x64 compiler was downloaded from its upstream release and its Authenticode publisher was validated as Pyrsys B.V. The compiler was extracted in portable mode under the workspace; it is not installed as a product on this machine. Compiler downloads and licensing information: https://jrsoftware.org/isdl.php . Portable-mode behavior: https://github.com/jrsoftware/issrc/blob/main/isportable.iss . Setup uses the compiler's standard wizard and uninstall engine.
 

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/PhpDevTray.Core/PhpDevTray.Core.csproj" />
+    <ProjectReference Include="../../src/PhpDevTray.Infrastructure/PhpDevTray.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,4 +1,4 @@
-# Local Server Manager
+# PHP DevTray
 
 ## Functional and Technical Specification
 
@@ -12,7 +12,7 @@
 
 # 1. Executive Summary
 
-Local Server Manager is a lightweight Windows system tray application for managing a local PHP and Nginx development environment.
+PHP DevTray is a lightweight Windows system tray application for managing a local PHP and Nginx development environment.
 
 It provides:
 
@@ -68,7 +68,7 @@ These capabilities may be considered in future releases.
 
 ## 3.1 Application model
 
-Local Server Manager runs as a single-instance Windows application.
+PHP DevTray runs as a single-instance Windows application.
 
 It has no conventional main window.
 
@@ -282,7 +282,7 @@ The application must separate installed binaries from user-owned data.
 Default layout:
 
 ```text
-%LOCALAPPDATA%/LocalServerManager/
+%LOCALAPPDATA%/PhpDevTray/
 |
 +-- bin/
 |   +-- php.cmd
@@ -503,7 +503,7 @@ The default PHP version is independent of per-site PHP version assignments.
 The application must create a stable CLI launcher directory:
 
 ```text
-%LOCALAPPDATA%/LocalServerManager/bin/
+%LOCALAPPDATA%/PhpDevTray/bin/
 ```
 
 The directory must be added to the current user's PATH, without requiring administrator privileges.
@@ -545,7 +545,7 @@ The application must prevent uninstalling the selected default PHP version witho
 
 **Application lifecycle**
 
-The stable launcher may remain installed in PATH when Local Server Manager is closed.
+The stable launcher may remain installed in PATH when PHP DevTray is closed.
 
 It launches PHP CLI commands on demand but must not start Nginx, PHP FastCGI, or Mailpit services.
 
@@ -604,7 +604,7 @@ Application-managed runtime customizations, including Mailpit SMTP configuration
 Example:
 
 ```ini
-; Managed by Local Server Manager.
+; Managed by PHP DevTray.
 ; Changes may be overwritten by the application.
 
 [mail function]
@@ -944,7 +944,7 @@ Mailpit provides:
 - Update
 - Configure
 
-Mailpit must terminate when Local Server Manager exits.
+Mailpit must terminate when PHP DevTray exits.
 
 ## 11.4 PHP mail() integration
 
@@ -953,7 +953,7 @@ For Windows PHP runtimes, the application configures PHP's built-in SMTP setting
 Example:
 
 ```ini
-; Managed by Local Server Manager.
+; Managed by PHP DevTray.
 
 [mail function]
 SMTP = 127.0.0.1
@@ -1056,7 +1056,7 @@ The application must not automatically enable Mailpit features that forward capt
 
 ## 12.1 Ownership
 
-Local Server Manager owns all PHP FastCGI, Nginx, and Mailpit processes it starts.
+PHP DevTray owns all PHP FastCGI, Nginx, and Mailpit processes it starts.
 
 Processes must not outlive the application.
 
@@ -1126,7 +1126,7 @@ The application manages updates for:
 - PHP runtimes.
 - Nginx.
 - Mailpit.
-- Local Server Manager itself.
+- PHP DevTray itself.
 
 ## 13.2 Update discovery
 

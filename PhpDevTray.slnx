@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PhpDevTray.Core/PhpDevTray.Core.csproj" />
+    <Project Path="src/PhpDevTray.Infrastructure/PhpDevTray.Infrastructure.csproj" />
+    <Project Path="src/PhpDevTray.App/PhpDevTray.App.csproj" />
+    <Project Path="src/PhpDevTray.Cli/PhpDevTray.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PhpDevTray.Checks/PhpDevTray.Checks.csproj" />
+    <Project Path="tests/PhpDevTray.UiChecks/PhpDevTray.UiChecks.csproj" />
+  </Folder>
+</Solution>

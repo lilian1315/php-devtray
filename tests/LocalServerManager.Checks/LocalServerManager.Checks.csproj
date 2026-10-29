@@ -1,9 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-  </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="../../src/LocalServerManager.Core/LocalServerManager.Core.csproj" />
-    <ProjectReference Include="../../src/LocalServerManager.Infrastructure/LocalServerManager.Infrastructure.csproj" />
-  </ItemGroup>
-</Project>

@@ -1,8 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <AssemblyName>php</AssemblyName>
-    <RootNamespace>LocalServerManager.Cli</RootNamespace>
-    <UseAppHost>true</UseAppHost>
-  </PropertyGroup>
-</Project>

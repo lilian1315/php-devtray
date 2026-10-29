@@ -9,7 +9,7 @@ include "C:/Dev/nginx-snippets/common.conf";
 include "C:/Dev/nginx-snippets/locations/*.conf";
 ```
 
-Keep the site's generated `@lsm/php/<site-id>@` marker. The manager replaces that marker with the selected channel's PHP routing when it builds a candidate. Other direct includes remain unchanged. Use forward slashes and quote paths containing spaces, following [Nginx's Windows guidance](https://nginx.org/en/docs/windows.html).
+Keep the site's generated `@pdt/php/<site-id>@` marker. The manager replaces that marker with the selected channel's PHP routing when it builds a candidate. Other direct includes remain unchanged. Use forward slashes and quote paths containing spaces, following [Nginx's Windows guidance](https://nginx.org/en/docs/windows.html).
 
 Included files may themselves use normal Nginx include syntax: absolute/relative paths and wildcard masks. These files are passed to Nginx without recursive rewriting or extra manager restrictions. Nginx validates their syntax and directive contexts with `nginx -t`; its [include documentation](https://nginx.org/en/docs/ngx_core_module.html#include) describes files and masks.
 

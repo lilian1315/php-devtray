@@ -20,4 +20,4 @@ Captures: docs/images/wpf-site-version-changed.png, wpf-site-version-restored.pn
 
 Not verified: full live keyboard traversal, real screen-reader announcements, menu acceptance through desktop automation, OS scaling/mixed DPI and all service transitions by pointer. Existing native control/resource checks and smoke interactions do not replace those acceptance checks. Existing backend limitations (including Nginx/Mailpit in-place updates) remain unchanged.
 
-Run `Start-Manager.cmd` for the packaged 0.6.0 build. Exit the previous tray instance first so the existing single-instance process does not reopen the older executable.
+Run `Start-PhpDevTray.cmd` for the packaged 0.6.0 build. Exit the previous tray instance first so the existing single-instance process does not reopen the older executable.

@@ -1,33 +1,37 @@
-# Local Server Manager
+# PHP DevTray
+
+PHP DevTray (PDT) manages local PHP development environments on Windows.
 
 A Windows desktop application that keeps running in the tray using the original **C# / .NET 10 / WPF** stack. The UI and runtime management layer are separate projects; native Windows Job Objects contain the services.
 
 This is **0.7.0 preview**: a normal resizable desktop window that hides to the tray on minimize or Close, preserving services and restoring its previous window state. It includes the reviewed summary cards, site PHP dropdowns, raw Activity log and installer tabs. The complete version 1.0 specification is still in progress.
 
-![Manager popup](docs/images/php-update-patches-Light.png)
+![PHP DevTray](docs/images/php-devtray-light.png)
 
 ## Install
 
-Run [LocalServerManager-0.7.0-Setup-x64.exe](artifacts/installers/LocalServerManager-0.7.0-Setup-x64.exe). It installs for your Windows account, adds Start menu access and supports uninstall. Your runtimes, settings and captured mail are kept separately. See [installer details](docs/INSTALLER.md).
+Run [PhpDevTray-0.7.0-Setup-x64.exe](artifacts/installers/PhpDevTray-0.7.0-Setup-x64.exe). It installs for your Windows account, adds Start menu access and supports uninstall. Your runtimes, settings and captured mail are kept separately. See [installer details](docs/INSTALLER.md).
+
+GitHub Actions builds the installer, signs tagged releases through SignPath, and submits stable releases to WinGet. See [release setup](docs/RELEASING.md) for the required repository configuration.
 
 ## Run
 
-Open `artifacts/releases/0.7.0/LocalServerManager.exe`. The normal resizable window opens on launch. Minimize or Close hides it to the tray while services continue. Left-click its notification icon to restore it, including its maximized state. Right-click for **Open manager**, **Start all / Stop all**, and **Exit and stop services**.
+Open `artifacts/releases/0.7.0/PhpDevTray.exe`. The normal resizable window opens on launch. Minimize or Close hides it to the tray while services continue. Left-click its notification icon to restore it, including its maximized state. Right-click for **Open manager**, **Start all / Stop all**, and **Exit and stop services**.
 
 The published folder is self-contained for Windows x64. Keep the full folder, including `cli/`, together. No .NET installation is required to run this published build. PHP retains its own Visual C++ prerequisite.
 
 To launch the application from a terminal, run:
 
 ```powershell
-.\artifacts\releases\0.7.0\LocalServerManager.exe
+.\artifacts\releases\0.7.0\PhpDevTray.exe
 ```
 
-Normal application data is stored in `%LOCALAPPDATA%\LocalServerManager`. No runtimes are bundled or started on first launch. PATH integration is off until explicitly enabled.
+Normal application data is stored in `%LOCALAPPDATA%\PhpDevTray`. No runtimes are bundled or started on first launch. PATH integration is off until explicitly enabled.
 
 For an isolated development profile:
 
 ```powershell
-.\artifacts\releases\0.7.0\LocalServerManager.exe --data-directory C:\Dev\LocalServerManagerData
+.\artifacts\releases\0.7.0\PhpDevTray.exe --data-directory C:\Dev\PhpDevTrayData
 ```
 
 Exit the older tray instance before opening the new executable. Only one ordinary instance runs in a Windows session. Exit the existing instance before changing its data-directory argument.
@@ -106,7 +110,7 @@ The first command builds Release and runs the process/configuration checks plus 
 For a rendered popup smoke test without touching the ordinary application profile:
 
 ```powershell
-.\artifacts\releases\0.7.0\LocalServerManager.exe --smoke-test C:\Dev\LsmSmoke --screenshot C:\Dev\LsmSmoke\popup.png
+.\artifacts\releases\0.7.0\PhpDevTray.exe --smoke-test C:\Dev\PdtSmoke --screenshot C:\Dev\PdtSmoke\popup.png
 ```
 
 This creates an isolated empty profile, renders the actual WPF popup, writes a PNG, cleans up the tray resources, and exits. Add `--smoke-section Settings` to inspect another section, `--theme Dark` for the dark palette, or `--verify-ui` for contrast and accessible-name assertions. `--smoke-width 860` forces a test viewport even on a smaller display; omit it to exercise work-area sizing.
@@ -116,7 +120,7 @@ See [the UI review](docs/UI-REVIEW.md), [architecture and implementation decisio
 The separate PHP patch acceptance test downloads an archived official Windows PHP build, verifies its publisher SBOM checksum, and exercises live update/rollback against the current release:
 
 ```powershell
-dotnet tests/LocalServerManager.Checks/bin/Release/net10.0-windows/LocalServerManager.Checks.dll --real-php-updates --profile C:\Dev\LsmPatchChecks --cli-bundle C:\Dev\LocalServerManager\artifacts\releases\0.7.0\cli --report C:\Dev\LsmPatchReport.md
+dotnet tests/PhpDevTray.Checks/bin/Release/net10.0-windows/PhpDevTray.Checks.dll --real-php-updates --profile C:\Dev\PdtPatchChecks --cli-bundle C:\Dev\PhpDevTray\artifacts\releases\0.7.0\cli --report C:\Dev\PdtPatchReport.md
 ```
 
 Use a new empty profile and free loopback port 8080. This test starts actual PHP and Nginx processes inside Jobs, leaves unrelated listeners alone, and does not enable PATH integration or modify hosts. Results are recorded in [REAL-PHP-UPDATES.md](docs/REAL-PHP-UPDATES.md).
@@ -124,7 +128,7 @@ Use a new empty profile and free loopback port 8080. This test starts actual PHP
 For the opt-in actual-runtime checks, build/publish first, then invoke the checks executable with absolute paths:
 
 ```powershell
-dotnet tests/LocalServerManager.Checks/bin/Release/net10.0-windows/LocalServerManager.Checks.dll --real-runtimes --profile C:\Dev\LsmIntegration --cli-bundle C:\Dev\LocalServerManager\artifacts\releases\0.7.0\cli --report C:\Dev\LsmIntegrationReport.md
+dotnet tests/PhpDevTray.Checks/bin/Release/net10.0-windows/PhpDevTray.Checks.dll --real-runtimes --profile C:\Dev\PdtIntegration --cli-bundle C:\Dev\PhpDevTray\artifacts\releases\0.7.0\cli --report C:\Dev\PdtIntegrationReport.md
 ```
 
 Use a dedicated empty profile. The harness requires free loopback port 8080, installs two PHP channels plus Nginx/Mailpit, selects temporary SMTP/HTTP ports, runs the assertions, and stops all owned services. The profile remains available for diagnosis. It never kills unrelated listeners or changes PATH/hosts.

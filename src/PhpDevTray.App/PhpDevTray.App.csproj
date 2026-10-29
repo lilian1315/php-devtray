@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>PhpDevTray</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../PhpDevTray.Core/PhpDevTray.Core.csproj" />
+    <ProjectReference Include="../PhpDevTray.Infrastructure/PhpDevTray.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

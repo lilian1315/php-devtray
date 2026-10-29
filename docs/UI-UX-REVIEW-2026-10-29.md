@@ -21,20 +21,20 @@ All rows below are implemented in 0.5.1; severity records the original impact. N
 
 | Severity | Domain | Location | Before | After | Why |
 | --- | --- | --- | --- | --- | --- |
-| HIGH | Accessibility | src/LocalServerManager.App/ManagerWindow.cs:723 | Selected theme indicated by background/border colors | Checkmark and selected accessible name | Theme selection must remain understandable without color discrimination |
-| MEDIUM | Layout | src/LocalServerManager.App/ManagerWindow.cs:491 | A search with no results left a blank message list and unrelated preview | Result count, explicit no-match state, Clear search, hidden preview | Explains the outcome and supplies a recovery path |
-| MEDIUM | UI | src/LocalServerManager.App/ManagerWindow.cs:153 | Error details could only be dismissed | Copy details and View activity | Makes errors shareable and investigation reachable |
-| MEDIUM | Accessibility | src/LocalServerManager.App/ExtensionsDialog.cs:168 | Long detail text was excluded from Tab navigation | Read-only details remain keyboard focusable and selectable; include full extension name | Keyboard users can inspect and copy long diagnostic values |
-| MEDIUM | Typography | src/LocalServerManager.App/ManagerWindow.cs:410, :714 | Site/workspace paths ellipsized with pointer tooltips | Full paths wrap in the existing scrolling surface | Values remain available without hovering |
-| MEDIUM | Writing | src/LocalServerManager.App/ManagerWindow.cs:639 | Network failure reused the normal discovery/empty heading | Could not load releases, explicit Retry release check | Distinguishes failed discovery from an empty catalogue |
-| MEDIUM | UI | src/LocalServerManager.App/ManagerWindow.cs:577 | SMTP/hosts copy had no persistent completion feedback; SMTP copy was hidden when messages existed | Shared footer confirmation, visible SMTP copy, Activity copy | Users can tell whether copy succeeded and reach frequent actions |
-| MEDIUM | Writing | src/LocalServerManager.App/TrayHost.cs:70, :128 | PHP tooltip only reported an active count; Exit Application omitted service consequence | Needs-attention/transition/count status and Exit and stop services | Makes partial failure and exit behavior explicit |
-| LOW | Writing | src/LocalServerManager.App/ManagerWindow.cs:323, :394, :695 | Generic promotional page descriptions | Concrete page-purpose descriptions | Helps users predict available tasks |
+| HIGH | Accessibility | src/PhpDevTray.App/ManagerWindow.cs:723 | Selected theme indicated by background/border colors | Checkmark and selected accessible name | Theme selection must remain understandable without color discrimination |
+| MEDIUM | Layout | src/PhpDevTray.App/ManagerWindow.cs:491 | A search with no results left a blank message list and unrelated preview | Result count, explicit no-match state, Clear search, hidden preview | Explains the outcome and supplies a recovery path |
+| MEDIUM | UI | src/PhpDevTray.App/ManagerWindow.cs:153 | Error details could only be dismissed | Copy details and View activity | Makes errors shareable and investigation reachable |
+| MEDIUM | Accessibility | src/PhpDevTray.App/ExtensionsDialog.cs:168 | Long detail text was excluded from Tab navigation | Read-only details remain keyboard focusable and selectable; include full extension name | Keyboard users can inspect and copy long diagnostic values |
+| MEDIUM | Typography | src/PhpDevTray.App/ManagerWindow.cs:410, :714 | Site/workspace paths ellipsized with pointer tooltips | Full paths wrap in the existing scrolling surface | Values remain available without hovering |
+| MEDIUM | Writing | src/PhpDevTray.App/ManagerWindow.cs:639 | Network failure reused the normal discovery/empty heading | Could not load releases, explicit Retry release check | Distinguishes failed discovery from an empty catalogue |
+| MEDIUM | UI | src/PhpDevTray.App/ManagerWindow.cs:577 | SMTP/hosts copy had no persistent completion feedback; SMTP copy was hidden when messages existed | Shared footer confirmation, visible SMTP copy, Activity copy | Users can tell whether copy succeeded and reach frequent actions |
+| MEDIUM | Writing | src/PhpDevTray.App/TrayHost.cs:70, :128 | PHP tooltip only reported an active count; Exit Application omitted service consequence | Needs-attention/transition/count status and Exit and stop services | Makes partial failure and exit behavior explicit |
+| LOW | Writing | src/PhpDevTray.App/ManagerWindow.cs:323, :394, :695 | Generic promotional page descriptions | Concrete page-purpose descriptions | Helps users predict available tasks |
 
 ## Verification
 
 Passed:
-- `work/Build-LocalServerManager.ps1`: Release build, full configuration/process checks and UI resource checks. Subsequent publish rebuild covers final copy changes. Build reported NU1900 warnings because NuGet vulnerability metadata was inaccessible; no compiler errors.
+- `work/Build-PhpDevTray.ps1`: Release build, full configuration/process checks and UI resource checks. Subsequent publish rebuild covers final copy changes. Build reported NU1900 warnings because NuGet vulnerability metadata was inaccessible; no compiler errors.
 - `work/Render-UiReview.ps1 -Scene Sites,Mail,Settings,Extensions,SiteForm,Empty,Error`: actual WPF captures and UI assertions. Both themes for settings and both dialogs. Repeated changed error/settings/mail/extensions at 576 DIPs.
 - `work/Render-UiReview.ps1 -Scene Downloads,Mail,Extensions,Error -Width 576`: includes real network-denied release lookup and recoverable installer state. No runtime downloads performed.
 - App smoke invocations at 576 DIPs with `--smoke-section Logs` and `--smoke-section 'PHP Versions'` in dark theme: captures and assertions passed.
@@ -50,4 +50,4 @@ Not verified:
 ## Verdict
 
 Approve for the inspected source and rendered WPF scope. This is a bounded engineering review, not complete accessibility certification or user acceptance. The summary remains pending user validation; unresolved runtime acceptance checks are listed above.
-`artifacts/releases/0.5.1/LocalServerManager.exe` also passed the isolated dark 576-DIP no-match inbox smoke with expected-text, names and contrast assertions. Start-Manager.cmd and README target 0.5.1.
+`artifacts/releases/0.5.1/PhpDevTray.exe` also passed the isolated dark 576-DIP no-match inbox smoke with expected-text, names and contrast assertions. Start-PhpDevTray.cmd and README target 0.5.1.

@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../PhpDevTray.Core/PhpDevTray.Core.csproj" />
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
+    <EmbeddedResource Include="Releases/Keys/*.key" />
+  </ItemGroup>
+</Project>

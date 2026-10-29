@@ -6,12 +6,12 @@ The stack decision is **C# / .NET 10 / WPF with Fluent-style presentation**, as 
 
 | Project | Responsibility |
 | --- | --- |
-| LocalServerManager.Core | UI-independent records, service definitions, snapshots, and application/supervisor contracts |
-| LocalServerManager.Infrastructure | Native supervision, persistence, runtime import, configuration generation, Mailpit API, and application coordinator |
-| LocalServerManager.App | WPF popup, native tray icon/menu, theme resources, activation, and shutdown |
-| LocalServerManager.Cli | Independent executable PHP launcher with argument/stream/exit-code forwarding |
-| LocalServerManager.Checks | Dependency-free configuration, orchestration, and real Windows process checks |
-| LocalServerManager.UiChecks | Native WPF control-template, theme and rendering-resource regression checks |
+| PhpDevTray.Core | UI-independent records, service definitions, snapshots, and application/supervisor contracts |
+| PhpDevTray.Infrastructure | Native supervision, persistence, runtime import, configuration generation, Mailpit API, and application coordinator |
+| PhpDevTray.App | WPF popup, native tray icon/menu, theme resources, activation, and shutdown |
+| PhpDevTray.Cli | Independent executable PHP launcher with argument/stream/exit-code forwarding |
+| PhpDevTray.Checks | Dependency-free configuration, orchestration, and real Windows process checks |
+| PhpDevTray.UiChecks | Native WPF control-template, theme and rendering-resource regression checks |
 
 The tray process owns all service Job handles. There is no permanently installed Windows Service. Each service receives a separate Job Object with kill-on-close semantics. Service processes start suspended and run only after containment succeeds. Validation/control commands are contained as well. Independently launched CLI commands use a separate launcher lifecycle.
 
@@ -43,7 +43,7 @@ Per-site PHP selection is exposed through the existing validated activation tran
 
 PHP source lives in `user/php/<channel>/conf.d/`. Each validated launch configuration is snapshotted under `data/state/php-config/`. The CLI launcher's atomically replaced `bin/launcher.json` selects one executable, primary INI, and resolved scan directory together. Changing a user INI file requires a subsequent start/restart to create and validate the new snapshot.
 
-Nginx user root and sites live in `user/nginx/`. The implemented markers are `@lsm/sites@`, `@lsm/mime@`, and `@lsm/php/<site-id>@`, each inside a quoted include directive. These source files must be compiled by the manager before being used by Nginx. The generated bootstrap includes an immutable candidate root with concrete paths. General nested includes are not accepted by this milestone.
+Nginx user root and sites live in `user/nginx/`. The implemented markers are `@pdt/sites@`, `@pdt/mime@`, and `@pdt/php/<site-id>@`, each inside a quoted include directive. These source files must be compiled by the manager before being used by Nginx. The generated bootstrap includes an immutable candidate root with concrete paths. General nested includes are not accepted by this milestone.
 
 The original requirement for zero loss of user configuration is preserved: imports and generated updates do not silently overwrite `20-custom.ini` or user-owned site directives. Corrupt settings remain on disk with a repair error and backup location, rather than being reset to an empty configuration.
 
