@@ -1,0 +1,9 @@
+PASS contrast TextBrush/SurfaceBrush: 15,83:1
+PASS contrast TextBrush/CardBrush: 14,16:1
+PASS contrast MutedBrush/CardBrush: 7,45:1
+PASS contrast MutedBrush/SurfaceBrush: 8,33:1
+PASS contrast AccentTextBrush/AccentBrush: 7,78:1
+PASS contrast ErrorBrush/CardBrush: 8,17:1
+PASS accessible names: 18 enabled keyboard controls
+PASS visible navigation labels fit their buttons
+PASS rendered window: 860 × 650 DIPs

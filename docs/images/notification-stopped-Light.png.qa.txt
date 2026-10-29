@@ -1,0 +1,12 @@
+PASS contrast TextBrush/SurfaceBrush: 14,09:1
+PASS contrast TextBrush/CardBrush: 14,97:1
+PASS contrast MutedBrush/CardBrush: 5,79:1
+PASS contrast MutedBrush/SurfaceBrush: 5,45:1
+PASS contrast AccentTextBrush/AccentBrush: 5,78:1
+PASS contrast ErrorBrush/CardBrush: 5,99:1
+PASS accessible names: 16 enabled keyboard controls
+PASS rendered text contrast: 18 visible enabled text blocks
+PASS selected navigation: Mail Trap
+PASS visible navigation labels fit their buttons
+PASS empty-state actions reachable: Mail Trap is stopped (scroll 0 DIPs)
+PASS rendered window: 576 × 600 DIPs
