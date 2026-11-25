@@ -81,14 +81,14 @@ internal static class PhpUpdateChecks
         await fixture.Manager.RegisterPhpAsync(Path.Combine(source, "php.exe"));
         CheckTransition(fixture.Supervisor.Events, "8.4.19");
         Check(ReferenceEquals(sibling, fixture.Supervisor.Running["php:8.5"]), "A patch update restarted an unrelated PHP channel.");
-        Check(fixture.Supervisor.Running["php:8.4"].Version == "8.4.19" && fixture.Supervisor.IsRunning("nginx"), "The new PHP patch and dependent Nginx must be healthy before committing.");
+        Check(fixture.Supervisor.Running["php:8.4"].Version == "8.4.19", "The new PHP patch must be healthy before committing.");
         fixture.CheckPolicy(fixture.Manager.Snapshot.PhpInstallations.Single(php => php.Channel == "8.4"), "8.4.19");
         fixture.Supervisor.Events.Clear();
         await fixture.Manager.ActivatePhpVersionAsync("8.4", "8.4.18");
         CheckTransition(fixture.Supervisor.Events, "8.4.18");
         Check(ReferenceEquals(sibling, fixture.Supervisor.Running["php:8.5"]), "Rollback restarted an unrelated channel.");
         await fixture.CheckUserFilesAsync();
-        Console.WriteLine("PASS: running PHP updates and rollback drain dependent Nginx, transition only the selected channel, verify readiness and resume Nginx in order.");
+        Console.WriteLine("PASS: running PHP updates and rollback transition only the selected channel, verify readiness.");
     }
 
     private static async Task RejectedCandidateAsync()
@@ -112,7 +112,7 @@ internal static class PhpUpdateChecks
         fixture.Supervisor.SuppressedModuleVersion = "8.4.22";
         await RejectAsync(() => fixture.Manager.RegisterPhpAsync(Path.Combine(source, "php.exe")), "A desired DLL that silently fails to load must be rejected.");
         Check(fixture.Supervisor.Events.Count == 0 && Directory.GetDirectories(fixture.ManagedPhpRoot).Length == 2, "A silently missing module caused a transition or leaked staging.");
-        Check(fixture.Supervisor.Running["php:8.4"].Version == "8.4.18" && fixture.Supervisor.IsRunning("nginx"), "Prevalidation failure disturbed the old environment.");
+        Check(fixture.Supervisor.Running["php:8.4"].Version == "8.4.18", "Prevalidation failure disturbed the old environment.");
         await fixture.CheckUserFilesAsync();
         Console.WriteLine("PASS: missing DLLs, silent desired-module load failures and mismatched CLI/CGI versions fail before service transition, settings publication or CLI changes, and staging is removed.");
     }
@@ -123,7 +123,6 @@ internal static class PhpUpdateChecks
         await fixture.StartEnvironmentAsync();
         var settings = await File.ReadAllBytesAsync(fixture.SettingsPath);
         var cli = await File.ReadAllBytesAsync(fixture.CliPath);
-        var bootstrap = await File.ReadAllBytesAsync(fixture.BootstrapPath);
         var source = await fixture.DistributionAsync("8.4.19");
         using var cancellation = new CancellationTokenSource();
         fixture.Supervisor.StartHook = (definition, token) =>
@@ -134,16 +133,15 @@ internal static class PhpUpdateChecks
         };
         await RejectAsync(() => fixture.Manager.RegisterPhpAsync(Path.Combine(source, "php.exe"), cancellation.Token), "A failing candidate must not be committed.", allowCancellation: cancel);
         Check(!cancel || cancellation.IsCancellationRequested, "The cancellation scenario did not reach candidate startup.");
-        Check(fixture.Supervisor.Running["php:8.4"].Version == "8.4.18" && fixture.Supervisor.IsRunning("nginx") && fixture.Supervisor.IsRunning("php:8.5"), "Failed activation did not recover the previous running environment.");
+        Check(fixture.Supervisor.Running["php:8.4"].Version == "8.4.18" && fixture.Supervisor.IsRunning("php:8.5"), "Failed activation did not recover the previous running environment.");
         Check(fixture.Supervisor.Events.Any(item => item == "start:php:8.4:8.4.19") && fixture.Supervisor.Events.LastIndexOf("start:php:8.4:8.4.18") > fixture.Supervisor.Events.IndexOf("start:php:8.4:8.4.19"), "Recovery must start the previous PHP only after the failed candidate is stopped.");
         Check(await MatchesFileAsync(settings, fixture.SettingsPath) && await MatchesFileAsync(cli, fixture.CliPath), "Failed activation changed committed settings or CLI selection.");
-        Check(await MatchesFileAsync(bootstrap, fixture.BootstrapPath), "Failed activation changed Nginx bootstrap routing.");
         Check(fixture.Manager.Snapshot.RetainedPhpVersions.Count == 0 && fixture.Manager.Snapshot.PhpInstallations.Single(php => php.Channel == "8.4").Version == "8.4.18", "A failed activation published its version or retained history.");
         Check(Directory.GetDirectories(fixture.ManagedPhpRoot).Length == 2, "A failed activation leaked or removed a managed binary directory.");
         await fixture.CheckUserFilesAsync();
         Console.WriteLine(cancel
-            ? "PASS: cancellation during candidate startup restores the previous running PHP/Nginx with uncanceled recovery and leaves settings, CLI and bootstrap unchanged."
-            : "PASS: candidate readiness failure restores the previous running PHP/Nginx and leaves settings, CLI, bootstrap and history unchanged.");
+            ? "PASS: cancellation during candidate startup restores the previous running PHP with uncanceled recovery and leaves settings, CLI and bootstrap unchanged."
+            : "PASS: candidate readiness failure restores the previous running PHP and leaves settings, CLI, bootstrap and history unchanged.");
     }
 
     private static async Task FailedSettingsCommitAsync()
@@ -168,7 +166,6 @@ internal static class PhpUpdateChecks
         await fixture.StartEnvironmentAsync();
         var settings = await File.ReadAllBytesAsync(fixture.SettingsPath);
         var cli = await File.ReadAllBytesAsync(fixture.CliPath);
-        var bootstrap = await File.ReadAllBytesAsync(fixture.BootstrapPath);
         var oldDefinition = fixture.Supervisor.Running["php:8.4"];
         var previousResolvedCustom = await File.ReadAllBytesAsync(Path.Combine(oldDefinition.Command.EnvironmentVariables["PHP_INI_SCAN_DIR"], "20-custom.ini"));
         var source = await fixture.DistributionAsync("8.4.19");
@@ -191,13 +188,13 @@ internal static class PhpUpdateChecks
         await RejectAsync(() => fixture.Manager.RegisterPhpAsync(Path.Combine(source, "php.exe")), "A user edit during candidate startup must prevent publication.");
         Check(editRevision > 0, "The INI drift check did not edit a candidate source at the intended command boundary.");
         Check(await File.ReadAllTextAsync(customPath) == editedCustom, "Activation recovery discarded the user's concurrent INI edit.");
-        Check(ReferenceEquals(fixture.Supervisor.Running["php:8.4"], oldDefinition) && fixture.Supervisor.IsRunning("nginx"), "INI drift recovery must resume the previous validated service definitions.");
+        Check(ReferenceEquals(fixture.Supervisor.Running["php:8.4"], oldDefinition), "INI drift recovery must resume the previous validated service definitions.");
         Check(await MatchesFileAsync(previousResolvedCustom, Path.Combine(oldDefinition.Command.EnvironmentVariables["PHP_INI_SCAN_DIR"], "20-custom.ini")), "Concurrent source editing mutated the old immutable configuration.");
-        Check(await MatchesFileAsync(settings, fixture.SettingsPath) && await MatchesFileAsync(cli, fixture.CliPath) && await MatchesFileAsync(bootstrap, fixture.BootstrapPath), "INI drift recovery changed committed settings, CLI or routing.");
+        Check(await MatchesFileAsync(settings, fixture.SettingsPath) && await MatchesFileAsync(cli, fixture.CliPath), "INI drift recovery changed committed settings, CLI or routing.");
         Check(fixture.Manager.Snapshot.RetainedPhpVersions.Count == 0 && Directory.GetDirectories(fixture.ManagedPhpRoot).Length == 2, "INI drift published history or leaked candidate files.");
         Console.WriteLine(duringModuleValidation
             ? "PASS: a source edit after candidate module validation cannot rebuild the tested configuration; activation rejects drift and preserves the user's edit and previous service definitions."
-            : "PASS: a user INI edit during candidate readiness cancels publication, preserves the edit, and resumes the previous immutable PHP/Nginx configuration.");
+            : "PASS: a user INI edit during candidate readiness cancels publication, preserves the edit, and resumes the previous immutable PHP configuration.");
     }
 
     private static async Task NondefaultUpdateLeavesPendingDefaultEditsAsync()
@@ -228,7 +225,7 @@ internal static class PhpUpdateChecks
 
     private static void CheckTransition(List<string> events, string targetVersion)
     {
-        Check(events.SequenceEqual(["stop:nginx", "stop:php:8.4", $"start:php:8.4:{targetVersion}", "start:nginx:1.30.0"]), "Incorrect PHP/Nginx transition order: " + string.Join(", ", events));
+        Check(events.SequenceEqual(["stop:php:8.4", $"start:php:8.4:{targetVersion}"]), "Incorrect PHP transition order: " + string.Join(", ", events));
     }
 
     private static void Check(bool value, string message) { if (!value) throw new InvalidOperationException(message); }
@@ -257,7 +254,6 @@ internal static class PhpUpdateChecks
         public string ManagedPhpRoot => Path.Combine(Root, "runtimes", "php");
         public string SettingsPath => Path.Combine(Root, "settings.json");
         public string CliPath => Path.Combine(Root, "bin", "launcher.json");
-        public string BootstrapPath => Path.Combine(Root, "user", "nginx", "generated", "bootstrap.conf");
 
         public static async Task<Fixture> CreateAsync()
         {
@@ -267,10 +263,6 @@ internal static class PhpUpdateChecks
             var catalog = new RuntimeCatalog(root, supervisor);
             var old = await CreateDistributionAsync(Path.Combine(root, "runtimes", "php", "8.4.18"), "8.4.18");
             var sibling = await CreateDistributionAsync(Path.Combine(root, "runtimes", "php", "8.5.4"), "8.5.4");
-            var nginx = Path.Combine(root, "runtimes", "nginx", "1.30.0");
-            Directory.CreateDirectory(Path.Combine(nginx, "conf"));
-            CreateExecutable(Path.Combine(nginx, "nginx.exe"));
-            await File.WriteAllTextAsync(Path.Combine(nginx, "conf", "mime.types"), "types { text/html html; }\n");
             var documentRoot = Path.Combine(root, "project");
             Directory.CreateDirectory(documentRoot);
             var custom = Path.Combine(root, "user", "php", "8.4", "conf.d", "20-custom.ini");
@@ -283,8 +275,7 @@ internal static class PhpUpdateChecks
                     new PhpInstallation { Id = "php:8.4", Channel = "8.4", Version = "8.4.18", Directory = old, Port = 19084, AutoStart = false, MailIntegrationEnabled = false, EnabledExtensions = ["gd"] },
                     new PhpInstallation { Id = "php:8.5", Channel = "8.5", Version = "8.5.4", Directory = sibling, Port = 19085 }
                 ],
-                DefaultPhpChannel = "8.4", NginxDirectory = nginx,
-                Sites = [new SiteDefinition { Id = "project", Hostname = "project.test", DocumentRoot = documentRoot, PhpChannel = "8.4" }]
+                DefaultPhpChannel = "8.4",
             });
             var manager = new EnvironmentManager(root, supervisor, catalog);
             await manager.InitializeAsync();
@@ -295,7 +286,7 @@ internal static class PhpUpdateChecks
         public async Task StartEnvironmentAsync()
         {
             await Manager.StartServiceAsync("php:8.5");
-            await Manager.StartServiceAsync("nginx");
+            await Manager.StartServiceAsync("php:8.4");
             Supervisor.Events.Clear();
         }
 
@@ -311,7 +302,7 @@ internal static class PhpUpdateChecks
         {
             Check(installation is { Id: "php:8.4", Channel: "8.4", Port: 19084, AutoStart: false, MailIntegrationEnabled: false } && installation.Version == version, "Patch activation changed stable channel policy.");
             Check(installation.EnabledExtensions.SequenceEqual(extensions ?? ["gd"]), "Patch activation did not preserve today's extension policy.");
-            Check(Manager.Snapshot.DefaultPhpChannel == defaultChannel && !Manager.Snapshot.PathIntegrationEnabled && Manager.Snapshot.Sites.Single() is { Id: "project", PhpChannel: "8.4", Hostname: "project.test" }, "Patch activation changed site assignment, default CLI channel or PATH integration.");
+            Check(Manager.Snapshot.DefaultPhpChannel == defaultChannel && !Manager.Snapshot.PathIntegrationEnabled, "Patch activation changed site assignment, default CLI channel or PATH integration.");
         }
 
         public async Task CheckUserFilesAsync()
@@ -380,8 +371,6 @@ internal static class PhpUpdateChecks
         {
             cancellationToken.ThrowIfCancellationRequested();
             Commands.Add(command);
-            if (Path.GetFileName(command.ExecutablePath).Equals("nginx.exe", StringComparison.OrdinalIgnoreCase))
-                return new ProcessResult(0, "", command.Arguments.Contains("-t") ? "configuration test is successful" : "nginx version: nginx/1.30.0");
             var marker = Path.Combine(command.WorkingDirectory!, Path.GetFileName(command.ExecutablePath).Equals("php-cgi.exe", StringComparison.OrdinalIgnoreCase) && File.Exists(Path.Combine(command.WorkingDirectory!, "cgi-version.fixture")) ? "cgi-version.fixture" : "version.fixture");
             var version = (await File.ReadAllTextAsync(marker, cancellationToken)).Trim();
             if (command.Arguments.Contains("-v")) return new ProcessResult(0, $"PHP {version} (cli) (NTS Visual C++ 2022 x64)\n", "");

@@ -26,7 +26,6 @@ internal static class RealRuntimeChecks
             throw new InvalidOperationException("Refusing to use a nonempty directory without the isolated-integration marker.");
         Directory.CreateDirectory(profile);
         await File.WriteAllTextAsync(marker, "PHP DevTray isolated integration profile\n");
-        Require(IsPortFree(8080), "Nginx integration needs free loopback port 8080; unrelated listeners are never stopped.");
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(12));
         var ct = timeout.Token;
@@ -57,48 +56,26 @@ internal static class RealRuntimeChecks
                 if (!manager.Snapshot.PhpInstallations.Any(p => p.Channel == php.Channel))
                     await manager.InstallReleaseAsync(php.Id, new ConsoleInstallProgress(), ct);
             }
-            foreach (var kind in new[] { ServiceKind.Nginx, ServiceKind.Mailpit })
+            foreach (var kind in new[] { ServiceKind.Mailpit })
             {
                 if (manager.Snapshot.Services.Any(s => s.Kind == kind && s.Status != ServiceStatus.NotInstalled)) continue;
                 var release = (await manager.GetAvailableReleasesAsync(kind, ct)).FirstOrDefault()
                     ?? throw new InvalidOperationException($"No verified official {kind} release is available.");
                 await manager.InstallReleaseAsync(release.Id, new ConsoleInstallProgress(), ct);
             }
-            Pass("Downloaded, verified, and registered actual PHP 8.4, PHP 8.5, Nginx, and Mailpit releases.");
+            Pass("Downloaded, verified, and registered actual PHP 8.4, PHP 8.5, and Mailpit releases.");
             foreach (var php in manager.Snapshot.PhpInstallations) lines.Add($"- Installed PHP {php.Version} ({php.Channel}).");
 
-            var projects = Path.Combine(profile, "projects with spaces é");
-            var alphaRoot = Path.Combine(projects, "alpha");
-            var betaRoot = Path.Combine(projects, "beta");
-            Directory.CreateDirectory(alphaRoot);
-            Directory.CreateDirectory(betaRoot);
-            const string infoScript = "<?php header('Content-Type: application/json'); echo json_encode(['version'=>PHP_VERSION,'openssl'=>extension_loaded('openssl')]);";
-            foreach (var root in new[] { alphaRoot, betaRoot })
-            {
-                await File.WriteAllTextAsync(Path.Combine(root, "index.php"), infoScript, ct);
-                await File.WriteAllTextAsync(Path.Combine(root, "image.jpg"), "<?php echo 'UNEXPECTED_IMAGE_EXECUTION'; ?>", ct);
-            }
-            var alpha = new SiteDefinition { Id = "integration-alpha", Hostname = "alpha.integration.test", DocumentRoot = alphaRoot, PhpChannel = "8.4" };
-            var beta = new SiteDefinition { Id = "integration-beta", Hostname = "beta.integration.test", DocumentRoot = betaRoot, PhpChannel = "8.5" };
-            await manager.SaveSiteAsync(alpha, ct);
-            await manager.SaveSiteAsync(beta, ct);
             await manager.SetDefaultPhpAsync("8.4", ct);
             await manager.StartAllAsync(ct);
             foreach (var service in manager.Snapshot.Services.Where(s => s.Kind != ServiceKind.Php))
                 lines.Add($"- Installed {service.DisplayName} {service.Version}.");
-            await AssertPhpAsync(alpha, "8.4", null);
-            await AssertPhpAsync(beta, "8.5", null);
-            Pass("Two real PHP channels execute through separate Nginx sites, including document roots with spaces and non-ASCII characters.");
 
             var extensions = await manager.GetPhpExtensionsAsync("8.4", ct);
             var openssl = extensions.Single(e => e.Name.Equals("openssl", StringComparison.OrdinalIgnoreCase));
             Require(openssl.IsAvailable && !openssl.IsBuiltIn, "Expected bundled dynamic OpenSSL extension in PHP 8.4.");
             await manager.SetPhpExtensionEnabledAsync("8.4", "openssl", true, ct);
-            await AssertPhpAsync(alpha, "8.4", true);
-            await AssertPhpAsync(beta, "8.5", null);
             await manager.SetPhpExtensionEnabledAsync("8.4", "openssl", false, ct);
-            await AssertPhpAsync(alpha, "8.4", false);
-            Pass("OpenSSL enable/disable is reflected by actual PHP requests while the other channel remains available.");
 
             await manager.SetPhpExtensionEnabledAsync("8.4", "opcache", true, ct);
             var enabled = await manager.GetPhpExtensionsAsync("8.4", ct);
@@ -106,52 +83,16 @@ internal static class RealRuntimeChecks
             await manager.SetPhpExtensionEnabledAsync("8.4", "opcache", false, ct);
             Pass("Bundled OPcache uses Zend-extension loading and can be disabled again.");
 
-            alpha = alpha with { PhpChannel = "8.5" };
-            await manager.SaveSiteAsync(alpha, ct);
-            await AssertPhpAsync(alpha, "8.5", null);
-            Require(manager.Snapshot.DefaultPhpChannel == "8.4", "Site switch must not change the CLI default.");
-            Pass("Per-site PHP switching changes actual request routing independently of the CLI default.");
-
-            var sourcePath = Path.Combine(profile, "user", "nginx", "sites-available", alpha.Id + ".conf");
-            var originalSource = await File.ReadAllTextAsync(sourcePath, ct);
-            try
-            {
-                await File.WriteAllTextAsync(sourcePath, originalSource + "\nnot_a_real_nginx_directive;\n", ct);
-                var rejected = false;
-                try { await manager.SetSiteEnabledAsync(beta.Id, false, ct); }
-                catch (Exception error) when (error is InvalidOperationException or InvalidDataException) { rejected = true; }
-                Require(rejected, "Nginx must reject invalid candidate configuration.");
-                await AssertPhpAsync(alpha, "8.5", null);
-                Require(manager.Snapshot.Sites.Single(s => s.Id == beta.Id).Enabled, "Failed candidate must not commit the site change.");
-            }
-            finally { await File.WriteAllTextAsync(sourcePath, originalSource, CancellationToken.None); }
-            Pass("An invalid user-edited Nginx candidate leaves actual working request routing and site metadata intact.");
-
-            foreach (var route in new[] { "/missing.php", "/image.jpg/missing.php", "/index.php/path-info" })
-            {
-                using var response = await RequestAsync(alpha, route);
-                Require(response.StatusCode == HttpStatusCode.NotFound, $"Unsafe/nonexistent script route {route} must return404.");
-                Require(!(await response.Content.ReadAsStringAsync(ct)).Contains("UNEXPECTED_IMAGE_EXECUTION", StringComparison.Ordinal), "Image upload content must never be guessed as a script.");
-            }
-            Pass("Actual Nginx/PHP rejects nonexistent scripts and path-guessing URLs.");
-
-            var subject = "PDT PHP mail " + Guid.NewGuid().ToString("N");
-            var mailCode = "<?php header('Content-Type: text/plain'); echo mail('capture@example.test', '" + subject + "', 'integration body', 'From: developer@example.test') ? 'captured' : 'failed';";
-            await File.WriteAllTextAsync(Path.Combine(alphaRoot, "send.php"), mailCode, ct);
-            using (var response = await RequestAsync(alpha, "/send.php"))
-            {
-                Require(response.IsSuccessStatusCode && (await response.Content.ReadAsStringAsync(ct)) == "captured", "PHP mail() must be accepted by the managed Mailpit listener.");
-            }
             var smtpSubject = "PDT SMTP " + Guid.NewGuid().ToString("N");
             await SendSmtpAsync(manager.Snapshot.SmtpPort, smtpSubject, ct);
             await WaitUntilAsync(async () =>
             {
                 var messages = await manager.GetMessagesAsync(ct);
-                return messages.Any(m => m.Subject == subject) && messages.Any(m => m.Subject == smtpSubject);
+                return messages.Any(m => m.Subject == smtpSubject);
             }, TimeSpan.FromSeconds(15), ct);
-            var capturedMessage = (await manager.GetMessagesAsync(ct)).Single(m => m.Subject == subject);
-            Require((await manager.GetMessageTextAsync(capturedMessage.Id, ct)).Contains("integration body", StringComparison.Ordinal), "Mailpit API must provide the captured actual message body.");
-            Pass("Actual PHP mail() and framework-style SMTP messages are captured and readable through Mailpit's API.");
+            var capturedMessage = (await manager.GetMessagesAsync(ct)).Single(m => m.Subject == smtpSubject);
+            Require((await manager.GetMessageTextAsync(capturedMessage.Id, ct)).Contains("framework-style SMTP body", StringComparison.Ordinal), "Mailpit API must provide the captured actual message body.");
+            Pass("SMTP messages are captured and readable through Mailpit's API.");
 
             var cliReleaseFlag = Path.Combine(profile, "independent-cli-release.txt");
             if (File.Exists(cliReleaseFlag)) File.Delete(cliReleaseFlag);
@@ -164,19 +105,11 @@ internal static class RealRuntimeChecks
             cliStart.ArgumentList.Add("$deadline=microtime(true)+60; while(!file_exists('" + phpFlag + "') && microtime(true)<$deadline) { usleep(100000); } echo PHP_VERSION; exit(7);");
             independentCli = Process.Start(cliStart) ?? throw new InvalidOperationException("Cannot launch the independent PHP CLI.");
 
-            var requestMarker = Path.Combine(alphaRoot, "slow-started.txt");
-            if (File.Exists(requestMarker)) File.Delete(requestMarker);
-            await File.WriteAllTextAsync(Path.Combine(alphaRoot, "slow.php"), "<?php file_put_contents(__DIR__.'/slow-started.txt','started'); usleep(1200000); echo 'drained';", ct);
-            var slowRequest = RequestAsync(alpha, "/slow.php");
-            await WaitUntilAsync(() => Task.FromResult(File.Exists(requestMarker)), TimeSpan.FromSeconds(10), ct);
             await manager.StopAllAsync(ct);
-            using (var drained = await slowRequest)
-                Require(drained.IsSuccessStatusCode && (await drained.Content.ReadAsStringAsync(ct)) == "drained", "Nginx shutdown must let the active PHP request complete before stopping PHP.");
-            Require(manager.Snapshot.Services.All(s => s.Status == ServiceStatus.Stopped), "Stop All must leave all actual service processes stopped.");
-            Pass("Stop All drains an in-flight PHP request before stopping the actual PHP and Mailpit processes.");
+            Require(manager.Snapshot.Services.All(s => s.Status is ServiceStatus.Stopped or ServiceStatus.NotInstalled), "Stop All must leave all actual service processes stopped.");
 
             await manager.StartServiceAsync("mailpit", ct);
-            Require((await manager.GetMessagesAsync(ct)).Any(m => m.Subject == subject), "Mailpit capture must persist after service restart.");
+            Require((await manager.GetMessagesAsync(ct)).Any(m => m.Subject == smtpSubject), "Mailpit capture must persist after service restart.");
             await manager.DisposeAsync();
             Require(!independentCli.HasExited, "The independent CLI must remain alive after the manager has exited.");
             await File.WriteAllTextAsync(cliReleaseFlag, "manager disposed", ct);
@@ -208,22 +141,6 @@ internal static class RealRuntimeChecks
         return;
 
         void Pass(string text) { Console.WriteLine("PASS: " + text); lines.Add("- PASS: " + text); }
-        async Task<HttpResponseMessage> RequestAsync(SiteDefinition site, string path)
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{site.Port}{path}");
-            request.Headers.Host = site.Hostname;
-            // A shared client is unnecessary for these explicit integration probes; dispose its handler with the response body read.
-            using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(30) };
-            return await http.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct);
-        }
-        async Task AssertPhpAsync(SiteDefinition site, string channel, bool? opensslEnabled)
-        {
-            using var response = await RequestAsync(site, "/index.php");
-            response.EnsureSuccessStatusCode();
-            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-            Require(json.RootElement.GetProperty("version").GetString()!.StartsWith(channel + ".", StringComparison.Ordinal), $"{site.Hostname} must execute PHP {channel}.");
-            if (opensslEnabled.HasValue) Require(json.RootElement.GetProperty("openssl").GetBoolean() == opensslEnabled, "Actual OpenSSL state differs from the selected extension state.");
-        }
     }
 
     private static string RequiredArgument(string[] args, string name)

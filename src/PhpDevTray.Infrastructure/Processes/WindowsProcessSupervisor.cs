@@ -152,12 +152,12 @@ public sealed class WindowsProcessSupervisor : IProcessSupervisor
         var clock = Stopwatch.StartNew();
         var ordered = _services.Values.OrderBy(slot => slot.Definition.Kind switch
         {
-            ServiceKind.Nginx => 0, ServiceKind.Php => 1, _ => 2
+            ServiceKind.Caddy => 0, ServiceKind.Php or ServiceKind.FrankenPhp => 1, _ => 2
         }).ToArray();
         foreach (var slot in ordered)
         {
             var remaining = timeout - clock.Elapsed;
-            var phaseBudget = timeout.TotalMilliseconds * (slot.Definition.Kind == ServiceKind.Nginx ? 2.0 / 3 : 1.0 / 6);
+            var phaseBudget = timeout.TotalMilliseconds * (slot.Definition.Kind == ServiceKind.Caddy ? 2.0 / 3 : 1.0 / 6);
             await StopAsync(slot.Definition.Id, Min(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero,
                 TimeSpan.FromMilliseconds(phaseBudget)), cancellationToken).ConfigureAwait(false);
         }

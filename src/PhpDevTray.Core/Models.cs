@@ -1,6 +1,6 @@
 namespace PhpDevTray.Core;
 
-public enum ServiceKind { Nginx, Php, Mailpit }
+public enum ServiceKind { Php, Mailpit, Caddy, FrankenPhp }
 public enum ServiceStatus { NotInstalled, Stopped, Starting, Running, Stopping, Restarting, Updating, Failed }
 public enum HealthCheckKind { Process, Tcp, FastCgi, Http, Smtp }
 public enum ThemePreference { System, Light, Dark }
@@ -13,6 +13,12 @@ public sealed record ProcessCommand
     public string? WorkingDirectory { get; init; }
     public IReadOnlyList<string> Arguments { get; init; } = [];
     public IReadOnlyDictionary<string, string> EnvironmentVariables { get; init; } = new Dictionary<string, string>();
+}
+
+public sealed class VisualCppRuntimeException(string installed, string required) : InvalidOperationException(
+    $"PHP requires the Microsoft Visual C++ x64 runtime {required} or newer. Windows has {installed}. Install the latest x64 redistributable, then retry PHP installation.")
+{
+    public const string DownloadUrl = "https://aka.ms/vc14/vc_redist.x64.exe";
 }
 
 public sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
@@ -41,7 +47,6 @@ public sealed record ServiceSnapshot
     public string? Endpoint { get; init; }
     public int? ProcessId { get; init; }
     public bool IsDefault { get; init; }
-    public int SiteCount { get; init; }
 }
 
 public sealed record PhpInstallation
@@ -64,45 +69,45 @@ public sealed record PhpRuntimeVersion
     public required string Directory { get; init; }
 }
 
-public sealed record SiteDefinition
+public sealed record FrankenRuntime(string Id, string Executable, int Port, [property: System.Text.Json.Serialization.JsonRequired] string PhpVersion, [property: System.Text.Json.Serialization.JsonRequired] string Version)
 {
-    public required string Id { get; init; }
-    public required string Hostname { get; init; }
-    public required string DocumentRoot { get; init; }
-    public required string PhpChannel { get; init; }
-    public bool Enabled { get; init; } = true;
-    public int Port { get; init; } = 8080;
+    public IReadOnlyList<string> EnabledExtensions { get; init; } = [];
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string Label => $"FrankenPHP {Version} · PHP {PhpVersion}";
 }
+public sealed record WebConfiguration(string Executable, FrankenRuntime[] Runtimes, WebSite[] Sites);
 
 public sealed record AppSettings
 {
     public ThemePreference Theme { get; init; } = ThemePreference.System;
+    public WebConfiguration Web { get; init; } = new("", [], []);
     public int SchemaVersion { get; init; } = 1;
     public IReadOnlyList<PhpInstallation> PhpInstallations { get; init; } = [];
     public IReadOnlyList<PhpRuntimeVersion> RetainedPhpVersions { get; init; } = [];
-    public IReadOnlyList<SiteDefinition> Sites { get; init; } = [];
     public string? DefaultPhpChannel { get; init; }
     public bool PathIntegrationEnabled { get; init; }
-    public string? NginxDirectory { get; init; }
     public string? MailpitExecutable { get; init; }
     public int SmtpPort { get; init; } = 39327;
     public int MailpitHttpPort { get; init; } = 8025;
-    public string LastSection { get; init; } = "PHP Versions";
+    public string LastSection { get; init; } = "Caddy";
     public bool StartServicesOnLaunch { get; init; }
 }
+
+public sealed record WebSite(string Hostname, string DocumentRoot, string RuntimeId, bool Enabled = true);
 
 public sealed record EnvironmentSnapshot
 {
     public ThemePreference Theme { get; init; } = ThemePreference.System;
     public required string DataDirectory { get; init; }
+    public IReadOnlyDictionary<string, string?> SiteRoots { get; init; } = new Dictionary<string, string?>();
+    public IReadOnlyList<WebSite> Sites { get; init; } = [];
     public IReadOnlyList<ServiceSnapshot> Services { get; init; } = [];
     public IReadOnlyList<PhpInstallation> PhpInstallations { get; init; } = [];
     public IReadOnlyList<PhpRuntimeVersion> RetainedPhpVersions { get; init; } = [];
-    public IReadOnlyList<SiteDefinition> Sites { get; init; } = [];
     public string? DefaultPhpChannel { get; init; }
     public bool PathIntegrationEnabled { get; init; }
     public string? LastError { get; init; }
-    public string LastSection { get; init; } = "PHP Versions";
+    public string LastSection { get; init; } = "Caddy";
     public bool IsBusy { get; init; }
     public int SmtpPort { get; init; } = 39327;
     public int MailpitHttpPort { get; init; } = 8025;
@@ -110,6 +115,7 @@ public sealed record EnvironmentSnapshot
 
 public sealed record RuntimeRelease
 {
+    public long ArchiveBytes { get; init; }
     public required string Id { get; init; }
     public required ServiceKind Kind { get; init; }
     public required string Version { get; init; }
@@ -117,7 +123,6 @@ public sealed record RuntimeRelease
     public required string DisplayName { get; init; }
     public required Uri DownloadUri { get; init; }
     public string? Sha256 { get; init; }
-    public Uri? SignatureUri { get; init; }
     public string? IntegrityDescription { get; init; }
 }
 

@@ -15,7 +15,6 @@ public sealed partial class RuntimeReleaseManager
     private const long MaximumDownloadBytes = 512L * 1024 * 1024;
     private const long MaximumMetadataBytes = 8L * 1024 * 1024;
     private static readonly Uri PhpManifest = new("https://downloads.php.net/~windows/releases/releases.json");
-    private static readonly Uri NginxPage = new("https://nginx.org/en/download.html");
     private static readonly Uri MailpitManifest = new("https://api.github.com/repos/axllent/mailpit/releases/latest");
     private static readonly HttpClient SharedClient = new(new SocketsHttpHandler
     {
@@ -41,8 +40,9 @@ public sealed partial class RuntimeReleaseManager
         timeout.CancelAfter(TimeSpan.FromSeconds(45));
         return kind switch
         {
+            ServiceKind.FrankenPhp => await AddPhpVersionsAsync(await GetWebReleasesAsync(kind, timeout.Token), timeout.Token),
+            ServiceKind.Caddy => await GetWebReleasesAsync(kind, timeout.Token),
             ServiceKind.Php => await GetPhpReleasesAsync(timeout.Token),
-            ServiceKind.Nginx => await GetNginxReleasesAsync(timeout.Token),
             ServiceKind.Mailpit => await GetMailpitReleasesAsync(timeout.Token),
             _ => throw new ArgumentOutOfRangeException(nameof(kind))
         };
@@ -53,14 +53,17 @@ public sealed partial class RuntimeReleaseManager
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(releaseId);
         var kind = releaseId.StartsWith("php:", StringComparison.Ordinal) ? ServiceKind.Php
-            : releaseId.StartsWith("nginx:", StringComparison.Ordinal) ? ServiceKind.Nginx
+            : releaseId.StartsWith("caddy:", StringComparison.Ordinal) ? ServiceKind.Caddy
+            : releaseId.StartsWith("frankenphp:", StringComparison.Ordinal) ? ServiceKind.FrankenPhp
             : releaseId.StartsWith("mailpit:", StringComparison.Ordinal) ? ServiceKind.Mailpit
             : throw new ArgumentException("Choose a release returned by the official runtime catalog.", nameof(releaseId));
         progress?.Report(new("Refreshing publisher release metadata"));
-        var releases = await GetReleasesAsync(kind, cancellationToken);
+        using var refresh = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        refresh.CancelAfter(TimeSpan.FromSeconds(45));
+        var releases = kind == ServiceKind.FrankenPhp ? await GetWebReleasesAsync(kind, refresh.Token) : await GetReleasesAsync(kind, refresh.Token);
         var release = releases.SingleOrDefault(item => item.Id == releaseId)
             ?? throw new InvalidOperationException("The selected release is no longer present in the publisher's current catalog. Refresh releases and choose again.");
-        if (release.Sha256 is null && release.SignatureUri is null)
+        if (release.Sha256 is null)
             throw new NotSupportedException("This release has no supported publisher integrity metadata. Automatic installation is unavailable; import a separately verified distribution instead.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(10));
@@ -75,30 +78,23 @@ public sealed partial class RuntimeReleaseManager
                 progress?.Report(new("Verifying publisher SHA-256 checksum"));
                 await ArtifactIntegrity.VerifySha256Async(archive, release.Sha256, timeout.Token);
             }
-            if (release.SignatureUri is not null)
-            {
-                progress?.Report(new("Verifying detached signature against pinned official Nginx keys"));
-                var signature = await ReadBytesAsync(release.SignatureUri, 128 * 1024, kind, timeout.Token);
-                await ArtifactIntegrity.VerifyDetachedAsync(archive, signature, LoadNginxKeyRings(), NginxFingerprints, timeout.Token);
-            }
             var extracted = Path.Combine(staging, "extracted");
             await SafeArchiveExtractor.ExtractAsync(archive, extracted, progress, timeout.Token);
             var executable = kind switch
             {
+                ServiceKind.Caddy => Path.Combine(extracted, "caddy.exe"),
+                ServiceKind.FrankenPhp => Path.Combine(extracted, "frankenphp.exe"),
                 ServiceKind.Php => Path.Combine(extracted, "php.exe"),
-                ServiceKind.Nginx => Path.Combine(extracted, "nginx-" + release.Version, "nginx.exe"),
                 ServiceKind.Mailpit => Path.Combine(extracted, "mailpit.exe"),
                 _ => throw new InvalidOperationException()
             };
             progress?.Report(new("Checking verified distribution layout"));
-            RuntimePaths.VerifyExecutable(executable, kind != ServiceKind.Nginx);
+            RuntimePaths.VerifyExecutable(executable, true);
             if (kind == ServiceKind.Php)
             {
                 RuntimePaths.VerifyExecutable(Path.Combine(extracted, "php-cgi.exe"), true);
                 if (!File.Exists(Path.Combine(extracted, "php.ini-development"))) throw new InvalidDataException("The verified PHP archive does not contain its required stock configuration.");
             }
-            if (kind == ServiceKind.Nginx && !File.Exists(Path.Combine(Path.GetDirectoryName(executable)!, "conf", "mime.types")))
-                throw new InvalidDataException("The verified Nginx archive does not contain its required configuration files.");
             progress?.Report(new("Verified runtime ready for import"));
             return new(kind, executable, staging, _downloadsDirectory);
         }
@@ -137,24 +133,36 @@ public sealed partial class RuntimeReleaseManager
         return releases.OrderByDescending(release => Version.Parse(release.Channel!)).ToArray();
     }
 
-    private async Task<IReadOnlyList<RuntimeRelease>> GetNginxReleasesAsync(CancellationToken cancellationToken)
+    private static string WebRepository(ServiceKind kind) => kind == ServiceKind.Caddy ? "caddyserver/caddy" : "php/frankenphp";
+
+    private async Task<IReadOnlyList<RuntimeRelease>> GetWebReleasesAsync(ServiceKind kind, CancellationToken token)
     {
-        var html = Encoding.UTF8.GetString(await ReadBytesAsync(NginxPage, MaximumMetadataBytes, ServiceKind.Nginx, cancellationToken));
-        var versions = NginxZipLinks().Matches(html).Select(match => match.Groups["version"].Value).Distinct(StringComparer.Ordinal).Take(2).ToArray();
-        if (versions.Length == 0) throw new NotSupportedException("No current Nginx Windows ZIP releases could be discovered from the official page.");
-        var releases = new List<RuntimeRelease>();
-        foreach (var version in versions)
+        var repo = WebRepository(kind);
+        var uri = new Uri($"https://api.github.com/repos/{repo}/releases?per_page=20");
+        using var metadata = JsonDocument.Parse(await ReadBytesAsync(uri, MaximumMetadataBytes, kind, token));
+        var result = new List<RuntimeRelease>();
+        foreach (var release in metadata.RootElement.EnumerateArray())
         {
-            var signed = html.Contains("nginx-" + version + ".zip.asc", StringComparison.Ordinal);
-            releases.Add(new RuntimeRelease
+            var tag = String(release, "tag_name");
+            if (!Regex.IsMatch(tag, @"^v\d+\.\d+\.\d+$") || release.GetProperty("draft").GetBoolean() || release.GetProperty("prerelease").GetBoolean()) continue;
+            var version = tag[1..];
+            var name = kind == ServiceKind.Caddy ? $"caddy_{version}_windows_amd64.zip" : "frankenphp-windows-x86_64.zip";
+            foreach (var asset in release.GetProperty("assets").EnumerateArray())
             {
-                Id = "nginx:" + version + ":windows", Kind = ServiceKind.Nginx, Version = version,
-                DisplayName = "Nginx " + version + " · Windows", DownloadUri = new Uri("https://nginx.org/download/nginx-" + version + ".zip"),
-                SignatureUri = signed ? new Uri("https://nginx.org/download/nginx-" + version + ".zip.asc") : null,
-                IntegrityDescription = signed ? "Detached OpenPGP signature; pinned official Nginx signing keys" : "Automatic installation unavailable: detached signature not published"
-            });
+                if (String(asset, "name") != name) continue;
+                var url = $"https://github.com/{repo}/releases/download/{tag}/{name}";
+                if (String(asset, "browser_download_url") != url) throw new InvalidDataException("Unexpected publisher asset URL.");
+                var digest = String(asset, "digest");
+                var sha = digest.StartsWith("sha256:", StringComparison.Ordinal) ? ValidSha256(digest[7..]) : null;
+                if (sha is null) continue;
+                var label = kind == ServiceKind.Caddy ? "Caddy" : "FrankenPHP";
+                result.Add(new RuntimeRelease { Id = $"{label.ToLowerInvariant()}:{version}", Kind = kind, Version = version,
+                    ArchiveBytes = asset.GetProperty("size").GetInt64(), DisplayName = $"{label} {version} · Windows x64", DownloadUri = new Uri(url), Sha256 = sha,
+                    IntegrityDescription = $"SHA-256 supplied by {repo} on GitHub" });
+            }
         }
-        return releases;
+        if (result.Count == 0) throw new NotSupportedException("No verified Windows x64 release was found.");
+        return result;
     }
 
     private async Task<IReadOnlyList<RuntimeRelease>> GetMailpitReleasesAsync(CancellationToken cancellationToken)
@@ -227,12 +235,13 @@ public sealed partial class RuntimeReleaseManager
         return output.ToArray();
     }
 
-    private async Task<HttpResponseMessage> GetResponseAsync(Uri uri, ServiceKind kind, CancellationToken cancellationToken)
+    private async Task<HttpResponseMessage> GetResponseAsync(Uri uri, ServiceKind kind, CancellationToken cancellationToken, System.Net.Http.Headers.RangeHeaderValue? range = null)
     {
         for (var redirect = 0; redirect < 6; redirect++)
         {
             ValidatePublisherUri(uri, kind);
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Range = range;
             request.Headers.UserAgent.ParseAdd("PhpDevTray/0.1");
             request.Headers.Accept.ParseAdd(uri.Host == "api.github.com" ? "application/vnd.github+json" : "*/*");
             if (uri.Host == "api.github.com") request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
@@ -266,7 +275,10 @@ public sealed partial class RuntimeReleaseManager
         {
             ServiceKind.Php => (uri.Host.Equals("downloads.php.net", StringComparison.OrdinalIgnoreCase) && uri.AbsolutePath.StartsWith("/~windows/releases/", StringComparison.Ordinal))
                 || (uri.Host.Equals("windows.php.net", StringComparison.OrdinalIgnoreCase) && uri.AbsolutePath.StartsWith("/downloads/releases/", StringComparison.Ordinal)),
-            ServiceKind.Nginx => uri.Host.Equals("nginx.org", StringComparison.OrdinalIgnoreCase) && (uri.AbsolutePath == "/en/download.html" || uri.AbsolutePath.StartsWith("/download/nginx-", StringComparison.Ordinal)),
+            ServiceKind.Caddy or ServiceKind.FrankenPhp =>
+                uri.Host == "api.github.com" && uri.AbsolutePath == $"/repos/{WebRepository(kind)}/releases"
+                || uri.Host == "github.com" && uri.AbsolutePath.StartsWith($"/{WebRepository(kind)}/releases/download/", StringComparison.Ordinal)
+                || uri.Host == "release-assets.githubusercontent.com",
             ServiceKind.Mailpit => (uri.Host.Equals("api.github.com", StringComparison.OrdinalIgnoreCase) && uri.AbsolutePath == "/repos/axllent/mailpit/releases/latest")
                 || (uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) && uri.AbsolutePath.StartsWith("/axllent/mailpit/releases/download/", StringComparison.Ordinal))
                 || uri.Host.Equals("release-assets.githubusercontent.com", StringComparison.OrdinalIgnoreCase)
@@ -279,28 +291,7 @@ public sealed partial class RuntimeReleaseManager
     private static string String(JsonElement element, string name) => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
     private static string? ValidSha256(string value) => value.Length == 64 && value.All(Uri.IsHexDigit) ? value.ToLowerInvariant() : null;
 
-    private static IReadOnlyList<byte[]> LoadNginxKeyRings()
-    {
-        var assembly = typeof(RuntimeReleaseManager).Assembly;
-        return new[] { "arut", "pluknet", "sb", "thresh" }.Select(name =>
-        {
-            using var resource = assembly.GetManifestResourceStream("PhpDevTray.Infrastructure.Releases.Keys." + name + ".key")
-                ?? throw new InvalidOperationException("The pinned official Nginx signing keys are missing from this build.");
-            using var output = new MemoryStream();
-            resource.CopyTo(output);
-            return output.ToArray();
-        }).ToArray();
-    }
-
-    private static readonly IReadOnlySet<string> NginxFingerprints = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        "43387825DDB1BB97EC36BA5D007C8D7C15D87369", "0AB1A7CA1283FF69D0E5F483E79FE70A6F23EB22",
-        "D6786CE303D9A9022998DC6CC8464D549AF75C0A", "7AB27B82D2C1EEA3402128EFBFC914095852E0BE",
-        "7338973069ED3F443F4D37DFA64FD5B17ADB39A8", "207882C1C3FBEFC96DCD822D02C1EAAF4ADC0B9A",
-        "13C82A63B603576156E30A4EA0EA981B66B0D967", "D7CBD7C1A25E5D31EB5D28BCEC67AEFF1281B785"
-    };
 
     [GeneratedRegex(@"^\d+\.\d+$", RegexOptions.CultureInvariant)] private static partial Regex ChannelPattern();
     [GeneratedRegex(@"^\d+\.\d+\.\d+(?:-\d+)?$", RegexOptions.CultureInvariant)] private static partial Regex PackageVersionPattern();
-    [GeneratedRegex("href\\s*=\\s*[\"'](?:https://nginx\\.org)?/?download/nginx-(?<version>\\d+\\.\\d+\\.\\d+)\\.zip[\"']", RegexOptions.CultureInvariant)] private static partial Regex NginxZipLinks();
 }

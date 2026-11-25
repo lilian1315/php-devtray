@@ -4,9 +4,15 @@ if (await ProcessChecks.TryHandleChildModeAsync(args)) return 0;
 
 try
 {
-    if (args.Contains("--real-nginx-includes", StringComparer.Ordinal))
+    if (args.Contains("--real-web-setup", StringComparer.Ordinal))
     {
-        await RealNginxIncludeChecks.RunAsync(args);
+        if (args.Length != 2 && args.Length != 4) throw new ArgumentException("Expected --real-web-setup <path to NTS php.exe>");
+        await WebSetupChecks.RunAsync(args[1], args.Length == 4 ? args[2] : null, args.Length == 4 ? args[3] : null);
+        return 0;
+    }
+    if (args.Contains("--real-caddy", StringComparer.Ordinal))
+    {
+        await RealCaddyChecks.RunAsync(args);
         return 0;
     }
     if (args.Contains("--real-php-updates", StringComparer.Ordinal))

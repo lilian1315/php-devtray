@@ -111,11 +111,6 @@ public partial class App : Application
                     await _popup.PrepareSmokeSectionAsync(section, e.Args.Contains("--smoke-check-releases", StringComparer.OrdinalIgnoreCase));
                 if (Argument(e.Args, "--smoke-php-updates") is { } updateChannel)
                     await _popup.PreparePhpUpdatesForSmokeAsync(updateChannel);
-                if (Argument(e.Args, "--smoke-site-php") is { } siteChoice)
-                {
-                    var choice = siteChoice.Split('|', 2); if (choice.Length != 2) throw new ArgumentException("Use hostname|PHP-channel for --smoke-site-php.");
-                    await _popup.SetSitePhpForSmokeAsync(choice[0], choice[1]);
-                }
                 if (Argument(e.Args, "--smoke-mail-search") is { } mailQuery) _popup.SetMailSearchForSmoke(mailQuery);
                 if (Argument(e.Args, "--smoke-error") is { } errorText) _popup.ShowError(errorText);
                 Window capture = _popup;
@@ -125,12 +120,6 @@ public partial class App : Application
                     await extensions.LoadForSmokeAsync();
                     extensions.Show();
                     capture = extensions;
-                }
-                else if (e.Args.Contains("--smoke-site-dialog", StringComparer.OrdinalIgnoreCase))
-                {
-                    var site = new SiteDialog(_manager.Snapshot.PhpInstallations.Select(p => p.Channel).ToArray()) { Owner = _popup };
-                    site.Show();
-                    capture = site;
                 }
                 if (Argument(e.Args, "--smoke-ready") is { } readyPath)
                 {

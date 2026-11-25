@@ -50,7 +50,7 @@ The package uses the committed Partner Center identity by default. `-PackageName
 .\scripts\build-store-package.ps1 -DevelopmentIdentity
 ```
 
-Outputs are under ignored `artifacts/store/`: the unsigned `.msix`, SHA-256 sidecar, identity summary, and a fresh `layout-<id>` directory for inspection. The existing application logo has one vector source, `src/PhpDevTray.App/Assets/AppLogo.xaml`. `scripts/new-app-icons.ps1` renders it into the native multi-size ICO during every app build and into Store PNGs through `scripts/new-store-assets.ps1`. Window/taskbar and notification icons use this same logo; notification status is a small badge, rendered at the taskbar monitor's DPI. The full app and `cli/` bundle are included; PHP, Nginx and Mailpit distributions and user data are not packaged.
+Outputs are under ignored `artifacts/store/`: the unsigned `.msix`, SHA-256 sidecar, identity summary, and a fresh `layout-<id>` directory for inspection. The existing application logo has one vector source, `src/PhpDevTray.App/Assets/AppLogo.xaml`. `scripts/new-app-icons.ps1` renders it into the native multi-size ICO during every app build and into Store PNGs through `scripts/new-store-assets.ps1`. Window/taskbar and notification icons use this same logo; notification status is a small badge, rendered at the taskbar monitor's DPI. The full app and `cli/` bundle are included; Caddy, FrankenPHP, PHP and Mailpit distributions and user data are not packaged.
 
 To export the same logo for the Store listing (300px/1024px PNG and SVG), run `scripts/new-app-icons.ps1 -OutputDirectory artifacts/store-listing -ListingAssets`.
 
@@ -58,7 +58,7 @@ The unsigned package is intended for Store upload, not installation by customers
 
 ## Certification and packaged acceptance
 
-The app is a full-trust desktop application (`packagedClassicApp`, `mediumIL`) and declares **runFullTrust**. In Partner Center, explain that it manages explicitly downloaded/imported PHP, Nginx and Mailpit processes for local development, reads selected site folders, opens loopback listeners, and uses Windows Job Objects to contain owned service processes. There is no Windows Service or administrator elevation. Microsoft reviews capability requests and the app's runtime downloads; packaging alone does not establish Store eligibility.
+The app is a full-trust desktop application (`packagedClassicApp`, `mediumIL`) and declares **runFullTrust**. In Partner Center, explain that it manages explicitly downloaded/imported Caddy, FrankenPHP, PHP and Mailpit processes for local development, reads selected site folders, opens loopback listeners, and uses Windows Job Objects to contain owned service processes. The tray runs without elevation. The optional Microsoft Visual C++ installer can request elevation to update the shared Windows runtime. Microsoft reviews capability requests and the app's runtime downloads; packaging alone does not establish Store eligibility.
 
 Store workspace data is stored under `%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalState\PhpDevTray`. It survives app updates, but Windows removes package-owned data on uninstall/reset. Export anything you want to retain first. Unpackaged development builds use `%LOCALAPPDATA%\PhpDevTray`; existing development profiles are not automatically migrated.
 
@@ -67,7 +67,7 @@ Command-line PHP uses a package execution alias, **php.exe**, managed in Windows
 Before a public submission, run Windows App Certification Kit on the package and test an installed package, ideally through a private Store flight:
 
 - Start menu launch, tray restore, minimize/close preserving services, and explicit Exit stopping them.
-- Runtime downloads/imports, Visual C++ prerequisites, PHP extensions, Nginx site access outside package storage, Mailpit capture, and PHP patch activation/recovery.
+- Runtime downloads/imports, Visual C++ prerequisites, PHP extensions, FrankenPHP site access outside package storage, Mailpit capture, and PHP patch activation/recovery.
 - `php -v`, arguments, working directory, stdin/stdout/stderr, exit codes and CLI lifetime after tray Exit; enable/disable the alias and test conflicts with another PHP installation.
 - Update an installed package to a higher `StorePackageVersion`, confirm workspace retention, and verify uninstall/reset behavior using a disposable profile. Exit the tray app and stop independent CLI sessions before testing an update.
 

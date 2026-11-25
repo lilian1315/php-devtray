@@ -15,6 +15,11 @@ public static class RuntimeChecks
         Directory.CreateDirectory(directory);
         try
         {
+            var rootJson = "{\"handler\":\"vars\",\"root\":\"C:/site\"}";
+            Require(CaddyStack.ReadFixedRoot(rootJson) == Path.GetFullPath("C:/site"), "A fixed root must be recognized.");
+            Require(CaddyStack.ReadFixedRoot("[{\"handler\":\"vars\",\"root\":\"C:/a\"},{\"handler\":\"vars\",\"root\":\"C:/b\"}]") is null, "Multiple roots must not be simplified.");
+            Require(CaddyStack.ReadFixedRoot("{\"handler\":\"vars\",\"root\":\"{http.request.host}\"}") is null, "Dynamic roots cannot be displayed as paths.");
+            Require(CaddyStack.ReadFixedRoot("{\"match\":[{\"path\":[\"/a/*\"]}],\"handle\":[" + rootJson + "]}") is null, "A conditional root must not be displayed as an unconditional path.");
             await using var supervisor = new FakeSupervisor();
             var catalog = new RuntimeCatalog(directory, supervisor);
             var phpDirectory = Path.Combine(directory, "fixture-php");
@@ -22,27 +27,23 @@ public static class RuntimeChecks
             CreateExecutable(Path.Combine(phpDirectory, "php.exe"));
             CreateExecutable(Path.Combine(phpDirectory, "php-cgi.exe"));
             await File.WriteAllTextAsync(Path.Combine(phpDirectory, "php.ini-development"), "; stock fixture\n");
+            supervisor.FailVisualCppCheck = true;
+            await ExpectAsync<VisualCppRuntimeException>(() => catalog.ImportPhpAsync(Path.Combine(phpDirectory, "php.exe"), new AppSettings()), "An incompatible Microsoft runtime must identify the required prerequisite.");
+            supervisor.FailVisualCppCheck = false;
             var php = new PhpInstallation { Id = "php:8.4", Version = "8.4.18", Channel = "8.4", Directory = phpDirectory, Port = 19084 };
-            var nginxDirectory = Path.Combine(directory, "fixture-nginx");
-            Directory.CreateDirectory(Path.Combine(nginxDirectory, "conf"));
-            CreateExecutable(Path.Combine(nginxDirectory, "nginx.exe"));
-            await File.WriteAllTextAsync(Path.Combine(nginxDirectory, "conf", "mime.types"), "types { text/html html; }\n");
             var mailpitFixture = Path.Combine(directory, "mailpit.exe");
             CreateExecutable(mailpitFixture);
             var importedMailpit = await catalog.ImportMailpitAsync(mailpitFixture);
             Require(File.Exists(importedMailpit), "Mailpit import must use its supported version subcommand.");
-            var documentRoot = Path.Combine(directory, "site root with spaces");
-            Directory.CreateDirectory(documentRoot);
-            var site = new SiteDefinition { Id = "app", Hostname = "app.test", DocumentRoot = documentRoot, PhpChannel = "8.4" };
-            var settings = new AppSettings { PhpInstallations = [php], DefaultPhpChannel = "8.4", NginxDirectory = nginxDirectory, Sites = [site] };
+            var settings = new AppSettings { PhpInstallations = [php], DefaultPhpChannel = "8.4" };
 
             var probes = new List<int>();
             var reservedSettings = settings with
             {
-                PhpInstallations = [php with { Port = 9087 }], Sites = [site with { Port = 9084 }],
+                PhpInstallations = [php with { Port = 9087 }],
                 SmtpPort = 9085, MailpitHttpPort = 9086
             };
-            var allocated = RuntimeCatalog.AllocatePort(9084, reservedSettings, port => { probes.Add(port); return port != 9088; });
+            var allocated = RuntimeCatalog.AllocatePort(9085, reservedSettings, port => { probes.Add(port); return port != 9088; });
             Require(allocated == 9089 && probes.SequenceEqual([9088,9089]),
                 "PHP allocation must skip configured site/service ports and unavailable bind probes.");
             probes.Clear();
@@ -91,87 +92,9 @@ public static class RuntimeChecks
                 Require(launcher.RootElement.GetProperty("channel").GetString() == "8.4", "CLI must retain the default channel.");
             }
 
-            await catalog.BuildNginxAsync(settings);
-            var bootstrap = Path.Combine(directory, "user", "nginx", "generated", "bootstrap.conf");
-            var previousBootstrap = await File.ReadAllTextAsync(bootstrap);
-            Require(supervisor.LastNginxTest is not null && supervisor.LastNginxTest.Arguments.Contains("-t"), "Nginx candidate must be tested before publication.");
-            var validationBootstrap = supervisor.LastNginxTest!.Arguments[2];
-            var candidate = supervisor.LastNginxCandidate!;
-            Require(validationBootstrap != bootstrap, "Validation must read the complete proposed candidate, not the current bootstrap.");
-            Require(Path.GetDirectoryName(validationBootstrap) == Path.GetDirectoryName(bootstrap), "Validation and runtime bootstraps must use the same relative include prefix.");
-            Require(!File.Exists(validationBootstrap), "Temporary validation bootstrap must be cleaned after validation.");
-            var compiled = await File.ReadAllTextAsync(candidate);
-            Require(compiled.Contains("127.0.0.1:8080", StringComparison.Ordinal), "Default Nginx listener must be loopback.");
-            var phpInclude = Path.Combine(Path.GetDirectoryName(candidate)!, "app.php.conf");
-            Require((await File.ReadAllTextAsync(phpInclude)).Contains("try_files $uri =404;", StringComparison.Ordinal), "PHP forwarding must reject nonexistent scripts.");
-            var sourceSite = Path.Combine(directory, "user", "nginx", "sites-available", "app.conf");
-            var userContent = await File.ReadAllTextAsync(sourceSite) + "\n# user comment retained\n# include \"C:/comment-only.conf\"; listen 0.0.0.0:9999;\n";
-            await File.WriteAllTextAsync(sourceSite, userContent);
-            await catalog.BuildNginxAsync(settings);
-            Require(await File.ReadAllTextAsync(sourceSite) == userContent, "Building managed configuration must never overwrite user-authored site content.");
-
-            previousBootstrap = await File.ReadAllTextAsync(bootstrap);
-            supervisor.FailNginxTest = true;
-            await ExpectAsync<InvalidOperationException>(() => catalog.BuildNginxAsync(settings), "Invalid candidate must fail activation.");
-            Require(await File.ReadAllTextAsync(bootstrap) == previousBootstrap, "Failed validation must preserve the previous bootstrap bytes.");
-            supervisor.FailNginxTest = false;
-            var nestedDirectory = Path.Combine(directory, "included snippets");
-            Directory.CreateDirectory(nestedDirectory);
-            var nested = Path.Combine(nestedDirectory, "entry.conf");
-            const string nestedContent = "# Nginx owns interpretation of nested relative paths and globs\ninclude snippets/*.conf;\n";
-            await File.WriteAllTextAsync(nested, nestedContent);
-            var absoluteSource = userContent.Replace("# user comment retained", "include " + RuntimePaths.NginxQuote(nested) + ";", StringComparison.Ordinal);
-            await File.WriteAllTextAsync(sourceSite, absoluteSource);
-            await catalog.BuildNginxAsync(settings);
-            Require(await File.ReadAllTextAsync(sourceSite) == absoluteSource && await File.ReadAllTextAsync(nested) == nestedContent,
-                "Absolute site includes and nested content must be passed through without rewriting user files.");
-            var compiledSite = Path.Combine(Path.GetDirectoryName(supervisor.LastNginxCandidate)!, "app.conf");
-            Require((await File.ReadAllTextAsync(compiledSite)).Contains("include " + RuntimePaths.NginxQuote(nested) + ";", StringComparison.Ordinal), "Candidate must retain the absolute include for nginx -t.");
-            previousBootstrap = await File.ReadAllTextAsync(bootstrap);
-            await File.WriteAllTextAsync(sourceSite, userContent.Replace("# user comment retained", "include snippets/live.conf;", StringComparison.Ordinal));
-            await ExpectAsync<InvalidDataException>(() => catalog.BuildNginxAsync(settings), "Direct relative site includes must be rejected.");
-            Require(await File.ReadAllTextAsync(bootstrap) == previousBootstrap, "Rejected relative includes must not replace working routing.");
-
-            await File.WriteAllTextAsync(sourceSite, userContent.Replace("listen 127.0.0.1:8080;", "listen 0.0.0.0:8080;", StringComparison.Ordinal));
-            await ExpectAsync<InvalidDataException>(() => catalog.BuildNginxAsync(settings), "Non-loopback listeners must not activate silently.");
-            Require(await File.ReadAllTextAsync(bootstrap) == previousBootstrap, "Rejected listener changes must preserve working routing.");
-            await File.WriteAllTextAsync(sourceSite, userContent);
-            await ExpectAsync<InvalidDataException>(() => catalog.BuildNginxAsync(settings with { Sites = [site with { Hostname = "other.test" }] }), "Source/metadata hostname mismatches must be reported without overwriting the source.");
-            Require(await File.ReadAllTextAsync(sourceSite) == userContent, "A metadata mismatch must preserve source bytes.");
-            await using (var manager = new EnvironmentManager(directory, supervisor, catalog))
-            {
-                await manager.InitializeAsync();
-                await manager.StartServiceAsync("nginx");
-                var stopsBeforeFailure = supervisor.StopCalls;
-                var stableBootstrap = await File.ReadAllTextAsync(bootstrap);
-                supervisor.FailNginxTest = true;
-                await ExpectAsync<InvalidOperationException>(() => manager.SetSiteEnabledAsync(site.Id, false),
-                    "The coordinator must reject an invalid candidate without interrupting live routing.");
-                Require(supervisor.StopCalls == stopsBeforeFailure, "Candidate validation failure must not stop the working Nginx process.");
-                Require(await File.ReadAllTextAsync(bootstrap) == stableBootstrap, "Candidate rejection must preserve active bootstrap bytes.");
-                Require(manager.Snapshot.Sites.Single().Enabled, "Rejected candidate must not commit the new site selection.");
-                supervisor.FailNginxTest = false;
-            }
-            await catalog.SaveAsync(settings with { NginxDirectory = null, Sites = [] });
-            await using (var manager = new EnvironmentManager(directory, supervisor, catalog))
-            {
-                await manager.InitializeAsync();
-                var disabled = site with { Id = "disabled", Hostname = "disabled.test", Enabled = false };
-                await manager.SaveSiteAsync(disabled);
-                var disabledSource = Path.Combine(directory, "user", "nginx", "sites-available", "disabled.conf");
-                Require(File.Exists(disabledSource), "Saving a disabled site without Nginx must create an editable source file.");
-                var edited = await File.ReadAllTextAsync(disabledSource) + "\n# user-owned disabled config\n";
-                await File.WriteAllTextAsync(disabledSource, edited);
-                await manager.SaveSiteAsync(disabled);
-                await catalog.EnsureSiteSourceAsync(disabled);
-                Require(await File.ReadAllTextAsync(disabledSource) == edited, "Ensuring/saving a site must not overwrite its edited source.");
-            }
-            RequireThrows<ArgumentException>(() => RuntimePaths.NginxQuote("C:/project/$nginx_injection"));
             RequireThrows<ArgumentException>(() => RuntimePaths.SafeIdentifier("../escape"));
             Console.WriteLine("PASS: atomic settings backups and corrupt-file preservation.");
             Console.WriteLine("PASS: immutable PHP configuration snapshots, native CLI selection, and CGI path guards.");
-            Console.WriteLine("PASS: complete candidate validation, user-source preservation, loopback-only routing, and source reconciliation errors.");
-            Console.WriteLine("PASS: coordinator candidate rejection preserves live services and committed site selection.");
         }
         finally { Directory.Delete(directory, true); }
     }
@@ -204,9 +127,7 @@ public static class RuntimeChecks
 
     private sealed class FakeSupervisor : IProcessSupervisor
     {
-        public bool FailNginxTest { get; set; }
-        public ProcessCommand? LastNginxTest { get; private set; }
-        public string? LastNginxCandidate { get; private set; }
+        public bool FailVisualCppCheck { get; set; }
         public int StopCalls { get; private set; }
         private readonly HashSet<string> _running = new(StringComparer.Ordinal);
         public event EventHandler<ServiceSnapshot>? ServiceChanged { add { } remove { } }
@@ -223,13 +144,7 @@ public static class RuntimeChecks
                 Require(command.Arguments.SequenceEqual(["version"]), "Mailpit exposes a version subcommand, not a --version flag.");
                 return Task.FromResult(new ProcessResult(0, "Mailpit v1.30.0\n", ""));
             }
-            if (command.Arguments.Contains("-t"))
-            {
-                LastNginxTest = command;
-                var wrapper = File.ReadAllText(command.Arguments[2]);
-                LastNginxCandidate = System.Text.RegularExpressions.Regex.Match(wrapper, "include\\s+\"([^\"]+)\";").Groups[1].Value;
-                return Task.FromResult(new ProcessResult(FailNginxTest ? 1 : 0, "", FailNginxTest ? "invalid fixture configuration" : "configuration test is successful"));
-            }
+            if (FailVisualCppCheck) return Task.FromResult(new ProcessResult(1, "", @"PHP Warning:  'C:\Windows\SYSTEM32\VCRUNTIME140.dll' 14.44 is not compatible with this PHP build linked with 14.51 in Unknown on line 0"));
             return Task.FromResult(new ProcessResult(0, "PHP 8.4.18 (cli) (NTS Visual C++ 2022 x64)\n", ""));
         }
     }

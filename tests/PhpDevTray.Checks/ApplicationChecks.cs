@@ -12,14 +12,6 @@ internal static class ApplicationChecks
         Directory.CreateDirectory(root);
         try
         {
-            var validSite = new SiteDefinition { Id = "app", Hostname = "app.test", DocumentRoot = root, PhpChannel = "8.4" };
-            EnvironmentManager.ValidateSite(validSite);
-            Reject(() => EnvironmentManager.ValidateSite(validSite with { Id = "../escape" }));
-            Reject(() => EnvironmentManager.ValidateSite(validSite with { Hostname = "app.test; include evil;" }));
-            Reject(() => EnvironmentManager.ValidateSite(validSite with { Port = 65536 }));
-            Reject(() => EnvironmentManager.ValidateSite(validSite with { DocumentRoot = "relative/path" }));
-            Console.WriteLine("PASS: site input validation rejects traversal and Nginx directive injection.");
-
             await using var supervisor = new RecordingSupervisor();
             var catalog = new RuntimeCatalog(root, supervisor);
             var initial = await catalog.LoadAsync();
@@ -27,16 +19,31 @@ internal static class ApplicationChecks
                 "Default SMTP must use the uncommon port 39327, outside Windows' default dynamic/reserved range.");
             Check(initial.PhpInstallations.Count == 0, "New data directory must contain no invented runtimes.");
             Check(!initial.PathIntegrationEnabled, "PATH integration must be opt-in.");
-            var saved = initial with { LastSection = "Logs", Sites = [validSite] };
+            var saved = initial with { LastSection = "Logs" };
             await catalog.SaveAsync(saved);
             var loaded = await catalog.LoadAsync();
-            Check(loaded.LastSection == "Logs" && loaded.Sites.Count == 1, "Settings must survive reload.");
-            Console.WriteLine("PASS: settings roundtrip preserves sites and navigation without enabling PATH.");
+            Check(loaded.LastSection == "Logs", "Settings must survive reload.");
+            Console.WriteLine("PASS: settings roundtrip preserves navigation without enabling PATH.");
 
             await using var manager = new EnvironmentManager(root, supervisor, catalog);
             await manager.InitializeAsync();
             Check(manager.Snapshot.Services.All(s => s.Status == ServiceStatus.NotInstalled), "Empty profile must show not installed, not running.");
             Check(supervisor.Started.Count == 0, "Initialization must not start unrequested services.");
+            var executable = Path.Combine(root, "frankenphp.exe");
+            File.Copy(Environment.ProcessPath!, executable);
+            await File.WriteAllTextAsync(Path.Combine(root, "php.ini-development"), "; fixture");
+            var stack = new CaddyStack(executable,
+                [new("test", executable, 9085, "8.5.13", "1.13.6")]) { Sites = [new("app.localhost", root, "franken-test")] };
+            await PhpDevTray.Infrastructure.Storage.AtomicJsonStore.WriteAsync(Path.Combine(root, "settings.json"), (await catalog.LoadAsync()) with { Web = stack.Configuration });
+            await manager.RefreshAsync();
+            await manager.StartAllAsync();
+            Check(supervisor.Started.SequenceEqual(["franken-test", "caddy"]), "Start All must start the backend before Caddy.");
+            var configs = Path.Combine(root, "data", "state", "caddy");
+            var edge = await File.ReadAllTextAsync(Path.Combine(configs, "caddy", "Caddyfile"));
+            var backend = await File.ReadAllTextAsync(Path.Combine(configs, "franken-test", "Caddyfile"));
+            Check(edge.Contains("tls internal") && !edge.Contains("skip_install_trust"), "Caddy must use local CA trust installation.");
+            Check(backend.Contains("auto_https off") && backend.Contains("skip_install_trust"), "Only the HTTP backend must skip trust installation.");
+            Console.WriteLine("PASS: Caddy is the default proxy and only FrankenPHP skips trust installation.");
             await manager.SetThemeAsync(ThemePreference.Dark);
             Check(manager.Snapshot.Theme == ThemePreference.Dark && (await catalog.LoadAsync()).Theme == ThemePreference.Dark,
                 "Appearance must be applied in snapshots and persist without touching runtime/CLI state.");
@@ -80,7 +87,9 @@ internal static class ApplicationChecks
         public Task StopAsync(string id, TimeSpan timeout, CancellationToken cancellationToken = default) { Stopped.Add(id); return Task.CompletedTask; }
         public Task StopAllAsync(TimeSpan timeout, CancellationToken cancellationToken = default) { StopAllCalls++; return Task.CompletedTask; }
         public Task<ProcessResult> RunAsync(ProcessCommand command, TimeSpan timeout, CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("This check must not execute a real runtime or touch user PATH.");
+            => command.Arguments.Contains("-m") ? Task.FromResult(new ProcessResult(0, "[PHP Modules]\nCore\n[Zend Modules]\n", ""))
+                : command.Arguments.Contains("--ini") || command.Arguments.FirstOrDefault() == "validate" ? Task.FromResult(new ProcessResult(0, "", ""))
+                : throw new InvalidOperationException("Unexpected command in the recording supervisor.");
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

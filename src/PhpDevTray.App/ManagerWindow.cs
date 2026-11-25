@@ -13,9 +13,9 @@ using Microsoft.Win32;
 
 namespace PhpDevTray.App;
 
-internal sealed class ManagerWindow : Window
+internal sealed partial class ManagerWindow : Window
 {
-    private static readonly string[] Sections = ["PHP Versions", "Nginx Sites", "Mail Trap", "Logs", "Updates", "Settings"];
+    private static readonly string[] Sections = ["Sites", "Caddy", "PHP Versions", "Mail Trap", "Logs", "Updates", "Settings"];
     private readonly IEnvironmentManager _manager;
     private readonly TextBlock _overall, _operationText, _errorText, _pageTitle, _pageDescription;
     private readonly Button _globalAction;
@@ -30,7 +30,6 @@ internal sealed class ManagerWindow : Window
     private readonly Dictionary<ServiceKind, Button> _serviceToggles = new();
     private readonly Dictionary<ServiceKind, Border> _serviceCards = new();
     private readonly List<FrameworkElement> _serviceGlyphs = [];
-    private readonly List<ComboBox> _siteVersionPickers = [];
     private readonly Dictionary<string, PhpRow> _phpRows = new();
     private readonly Dictionary<ServiceKind, InlineService> _inlineServices = new();
     private readonly List<(Button Button, Func<bool> Enabled)> _bodyButtons = [];
@@ -56,10 +55,12 @@ internal sealed class ManagerWindow : Window
     private Grid? _mailDetail;
     private string? _feedbackMessage;
     private CancellationTokenSource? _messageCancellation;
+    private ServiceKind? _runtimeTab;
     private ServiceKind _releaseKind = ServiceKind.Php;
     private string? _releasePhpChannel;
     private IReadOnlyList<RuntimeRelease> _releases = [];
     private string? _selectedReleaseId, _releaseError;
+    private string? _visualCppRetryId;
     private bool _releaseCheckComplete;
     private CancellationTokenSource? _installCancellation;
     private RuntimeInstallProgress? _installProgress;
@@ -101,8 +102,9 @@ internal sealed class ManagerWindow : Window
         lower.Children.Add(Nav("Settings", "Settings", AppIcon.Settings));
         DockPanel.SetDock(lower, Dock.Bottom); sidebar.Children.Add(lower);
         var nav = new StackPanel();
+        nav.Children.Add(Nav("Sites", "Sites", AppIcon.Sites));
+        nav.Children.Add(Nav("Caddy", "Caddy", AppIcon.Globe));
         nav.Children.Add(Nav("PHP Versions", "PHP runtimes", AppIcon.Terminal));
-        nav.Children.Add(Nav("Nginx Sites", "Nginx", AppIcon.Globe));
         nav.Children.Add(Nav("Mail Trap", "Mail Trap", AppIcon.Mail));
         nav.Children.Add(Nav("Logs", "Activity", AppIcon.Logs));
         var navDivider = new Border { Height = 1, Margin = new Thickness(12, 17, 12, 15) }; navDivider.SetResourceReference(Border.BackgroundProperty, "DividerBrush"); nav.Children.Add(navDivider);
@@ -128,7 +130,7 @@ internal sealed class ManagerWindow : Window
         Grid.SetColumn(headerActions, 1); header.Children.Add(headerActions); main.Children.Add(header);
 
         var serviceStrip = new UniformGrid { Columns = 3, Margin = new Thickness(24, 8, 18, 8) };
-        AddServiceChip(serviceStrip, ServiceKind.Nginx, "Nginx", AppIcon.Globe, "Nginx Sites");
+        AddServiceChip(serviceStrip, ServiceKind.Caddy, "Caddy", AppIcon.Globe, "Caddy");
         AddServiceChip(serviceStrip, ServiceKind.Php, "PHP", AppIcon.Terminal, "PHP Versions");
         AddServiceChip(serviceStrip, ServiceKind.Mailpit, "Mail Trap", AppIcon.Mail, "Mail Trap");
         var serviceSurface = new Border { Child = serviceStrip, BorderThickness = new Thickness(0, 1, 0, 1) };
@@ -239,12 +241,13 @@ internal sealed class ManagerWindow : Window
         var signature = StructureSignature();
         if (_renderedSection != _section || _bodySignature != signature)
         {
-            _renderedSection = _section; _bodySignature = signature; _bodyButtons.Clear(); _contentHost.Children.Clear(); _pageActions.Children.Clear(); _phpRows.Clear(); _inlineServices.Clear(); _siteVersionPickers.Clear();
+            _renderedSection = _section; _bodySignature = signature; _bodyButtons.Clear(); _contentHost.Children.Clear(); _pageActions.Children.Clear(); _phpRows.Clear(); _inlineServices.Clear();
             _mailList = null; _mailSearch = null; _mailPreview = null; _mailResults = null; _mailNoResults = null; _mailDetail = null; _logOutput = null; _releaseContent = null; _releaseVersionPicker = null; _pathSetting = null; _defaultPhpPicker = null; _themeButtons.Clear();
             switch (_section)
             {
+                case "Sites": BuildSites(); break;
+                case "Caddy": BuildCaddy(); break;
                 case "PHP Versions": BuildPhp(); break;
-                case "Nginx Sites": BuildSites(); break;
                 case "Mail Trap": BuildMail(); break;
                 case "Logs": BuildLogs(); break;
                 case "Updates": BuildInstall(); break;
@@ -262,14 +265,14 @@ internal sealed class ManagerWindow : Window
         if (_section == "Settings") UpdateSettings();
         UpdateLogOutput();
         foreach (var registration in _bodyButtons.ToArray()) registration.Button.IsEnabled = registration.Enabled();
-        foreach (var picker in _siteVersionPickers) picker.IsEnabled = !Busy;
         UpdatePageRefresh();
     }
 
     private string StructureSignature() => _section switch
     {
-        "PHP Versions" => string.Join('|', _snapshot.PhpInstallations.Select(p => $"{p.Id}:{p.Version}:{p.Port}")) + _snapshot.DefaultPhpChannel + string.Join('|', _snapshot.Sites.Select(s => s.PhpChannel)) + string.Join('|', _snapshot.RetainedPhpVersions.Select(p => $"{p.Channel}:{p.Version}")),
-        "Nginx Sites" => string.Join('|', _snapshot.Sites.Select(s => $"{s.Id}:{s.Hostname}:{s.DocumentRoot}:{s.PhpChannel}:{s.Enabled}:{s.Port}")) + string.Join('|', _snapshot.PhpInstallations.Select(p => p.Channel)) + HasRuntime(ServiceKind.Nginx),
+        "Sites" => string.Join("|", _snapshot.SiteRoots.Select(p => p.Key + p.Value)) + string.Join("|", _snapshot.Sites) + string.Join("|", _snapshot.Services.Select(s => s.Id + (s.Status != ServiceStatus.NotInstalled))),
+        "Caddy" => string.Join('|', _snapshot.Services.Where(s => s.Kind is ServiceKind.Caddy or ServiceKind.FrankenPhp).Select(s => $"{s.Id}:{s.Status}:{s.Endpoint}")),
+        "PHP Versions" => string.Join("|", _snapshot.Services.Where(s => s.Kind == ServiceKind.FrankenPhp).Select(s => $"{s.Id}:{s.DisplayName}:{s.Status}:{s.Endpoint}")) + string.Join('|', _snapshot.PhpInstallations.Select(p => $"{p.Id}:{p.Version}:{p.Port}")) + _snapshot.DefaultPhpChannel + string.Join('|', _snapshot.RetainedPhpVersions.Select(p => $"{p.Channel}:{p.Version}")),
         "Mail Trap" => HasRuntime(ServiceKind.Mailpit) + ":" + MailIsRunning + ":" + (_messages.Count > 0),
         "Settings" => "Settings:" + string.Join('|', _snapshot.PhpInstallations.Select(p => p.Channel)),
         _ => _section,
@@ -305,16 +308,16 @@ internal sealed class ManagerWindow : Window
     {
         foreach (var kind in _serviceLabels.Keys)
         {
-            var services = _snapshot.Services.Where(s => s.Kind == kind && s.Status != ServiceStatus.NotInstalled).ToArray();
+            var services = _snapshot.Services.Where(s => (s.Kind == kind || kind == ServiceKind.Php && s.Kind == ServiceKind.FrankenPhp) && s.Status != ServiceStatus.NotInstalled).ToArray();
             var state = services.Length == 0 ? ServiceStatus.NotInstalled : services.Any(s => s.Status == ServiceStatus.Failed) ? ServiceStatus.Failed : services.Any(s => IsTransition(s.Status)) ? ServiceStatus.Starting : services.Any(s => s.Status == ServiceStatus.Running) ? ServiceStatus.Running : ServiceStatus.Stopped;
             var active = services.Count(s => s.Status == ServiceStatus.Running);
             _serviceLabels[kind].Text = kind == ServiceKind.Php && services.Length > 0 && state == ServiceStatus.Running
                 ? active == services.Length ? $"{active} running" : $"{active}/{services.Length} running"
                 : kind == ServiceKind.Php && state == ServiceStatus.Stopped ? $"{services.Length} stopped" : StatusLabel(state);
-            var name = kind == ServiceKind.Php ? "PHP" : kind == ServiceKind.Nginx ? "Nginx" : "Mail Trap";
+            var name = kind == ServiceKind.Php ? "PHP" : kind == ServiceKind.Caddy ? "Caddy" : "Mail Trap";
             AutomationProperties.SetName(_serviceButtons[kind], $"{name}, {_serviceLabels[kind].Text}. Open details");
             _serviceDots[kind].SetResourceReference(Border.BackgroundProperty, StatusBrush(state));
-            var selected = _section == (kind == ServiceKind.Php ? "PHP Versions" : kind == ServiceKind.Nginx ? "Nginx Sites" : "Mail Trap");
+            var selected = _section == (kind == ServiceKind.Php ? "PHP Versions" : kind == ServiceKind.Caddy ? "Caddy" : "Mail Trap");
             _serviceCards[kind].SetResourceReference(Border.BackgroundProperty, selected ? "AccentSoftBrush" : "CardBrush");
             _serviceCards[kind].SetResourceReference(Border.BorderBrushProperty, selected ? "AccentBrush" : "BorderBrush");
             var toggle = _serviceToggles[kind]; var running = services.Any(service => service.Status == ServiceStatus.Running);
@@ -327,12 +330,9 @@ internal sealed class ManagerWindow : Window
 
     private Task ToggleAllPhpAsync() => RunAsync("Updating PHP runtimes…", async () =>
     {
-        var runtimes = _snapshot.Services.Where(service => service.Kind == ServiceKind.Php && service.Status != ServiceStatus.NotInstalled).ToArray();
+        var runtimes = _snapshot.Services.Where(service => (service.Kind is ServiceKind.Php or ServiceKind.FrankenPhp) && service.Status != ServiceStatus.NotInstalled).ToArray();
         if (runtimes.Any(service => service.Status == ServiceStatus.Running))
         {
-            if (_snapshot.Services.Any(service => service.Kind == ServiceKind.Nginx && service.Status == ServiceStatus.Running) &&
-                _snapshot.Sites.Any(site => site.Enabled && runtimes.Any(runtime => runtime.Id == $"php:{site.PhpChannel}")))
-                await _manager.StopServiceAsync("nginx", _lifetime.Token);
             foreach (var runtime in runtimes) await _manager.StopServiceAsync(runtime.Id, _lifetime.Token);
         }
         else foreach (var runtime in runtimes) await _manager.StartServiceAsync(runtime.Id, _lifetime.Token);
@@ -340,15 +340,54 @@ internal sealed class ManagerWindow : Window
 
     private void BuildPhp()
     {
-        Heading("PHP runtimes", "Manage versions, extensions and command-line PHP.");
-        _pageActions.Children.Add(ActionButton("Install PHP", () => OpenInstallAsync(ServiceKind.Php), "PrimaryButtonStyle", AppIcon.Plus));
-        _pageActions.Children.Add(ActionButton("Open config folder", () => OpenPathAsync(Path.Combine(_snapshot.DataDirectory, "user", "php")), "SecondaryButtonStyle", AppIcon.Folder, "Open PHP configuration folder", independent: true));
-        if (_snapshot.PhpInstallations.Count == 0)
+        Heading("PHP runtimes", "Manage the PHP engines available to your sites.");
+        var kind = _runtimeTab ?? (_snapshot.PhpInstallations.Count == 0 && HasRuntime(ServiceKind.FrankenPhp) ? ServiceKind.FrankenPhp : ServiceKind.Php);
+        var engine = kind == ServiceKind.FrankenPhp ? "FrankenPHP" : "PHP NTS";
+        _pageActions.Children.Add(ActionButton($"Install {engine}", () => OpenInstallAsync(kind), "PrimaryButtonStyle", AppIcon.Plus));
+        var rows = new StackPanel();
+        var tabs = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
+        foreach (var (tabKind, label) in new[] { (ServiceKind.Php, "PHP NTS"), (ServiceKind.FrankenPhp, "FrankenPHP") })
         {
-            _contentHost.Children.Add(Empty(AppIcon.Terminal, "Start with PHP", "Install a PHP runtime, then give each project the version it needs.", "Install PHP", () => OpenInstallAsync(ServiceKind.Php), "Import an existing runtime", () => BrowseRuntimeAsync(ServiceKind.Php), "01  Install a runtime     02  Add a site     03  Start building"));
+            var tab = ActionButton(label, () =>
+            {
+                _runtimeTab = tabKind;
+                _renderedSection = null;
+                Render(_snapshot);
+                return Task.CompletedTask;
+            }, "InstallerTabStyle");
+            if (kind == tabKind) { tab.Tag = "Selected"; AutomationProperties.SetHelpText(tab, "Selected engine"); }
+            tabs.Children.Add(tab);
+        }
+        rows.Children.Add(tabs);
+        _contentHost.Children.Add(Scroll(rows));
+        if (!HasRuntime(kind))
+        {
+            rows.Children.Add(Empty(AppIcon.Terminal, $"No {engine} runtimes installed", "Install an official release or import an extracted Windows distribution.",
+                $"Install {engine}", () => OpenInstallAsync(kind), "Import runtime", () => BrowseRuntimeAsync(kind)));
             return;
         }
-        var rows = new StackPanel();
+        if (kind == ServiceKind.FrankenPhp)
+        {
+            foreach (var runtime in _snapshot.Services.Where(s => s.Kind == kind && s.Status != ServiceStatus.NotInstalled))
+            {
+                var row = new DockPanel();
+                var running = runtime.Status == ServiceStatus.Running;
+                var controls = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
+                controls.Children.Add(ActionButton(running ? "Stop" : "Start", () => RunAsync("Updating FrankenPHP…", () =>
+                    running ? _manager.StopServiceAsync(runtime.Id, _lifetime.Token) : _manager.StartServiceAsync(runtime.Id, _lifetime.Token)),
+                    "SecondaryButtonStyle", running ? AppIcon.Stop : AppIcon.Play));
+                controls.Children.Add(MoreButton($"{runtime.DisplayName} actions", () => [
+                    Menu("Restart", () => RunAsync("Restarting FrankenPHP…", () => _manager.RestartServiceAsync(runtime.Id, _lifetime.Token)), running && !Busy),
+                    Menu("Manage extensions…", () => ShowExtensionsAsync(runtime.Id), !Busy),
+                    Menu("Manage sites", () => NavigateAsync("Sites"))]));
+                DockPanel.SetDock(controls, Dock.Right); row.Children.Add(controls);
+                var labels = new StackPanel(); labels.Children.Add(T(runtime.DisplayName, 14, true));
+                labels.Children.Add(T($"{StatusLabel(runtime.Status)} · {runtime.Endpoint}", 12, muted: true));
+                row.Children.Add(labels); rows.Children.Add(RowSurface(row));
+            }
+            return;
+        }
+        _pageActions.Children.Add(ActionButton("Open config folder", () => OpenPathAsync(Path.Combine(_snapshot.DataDirectory, "user", "php")), "SecondaryButtonStyle", AppIcon.Folder, independent: true));
         foreach (var installation in _snapshot.PhpInstallations.OrderByDescending(p => Version.TryParse(p.Version, out var version) ? version : new Version()))
         {
             var grid = new Grid(); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(42) }); grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -356,8 +395,7 @@ internal sealed class ManagerWindow : Window
             var labels = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 8, 0) };
             var title = new WrapPanel(); title.Children.Add(T($"PHP {installation.Channel}", 14, true));
             if (_snapshot.DefaultPhpChannel == installation.Channel) title.Children.Add(Badge("CLI default", "AccentSoftBrush", new Thickness(8, 0, 0, 0)));
-            var siteCount = _snapshot.Sites.Count(s => s.PhpChannel == installation.Channel);
-            labels.Children.Add(title); labels.Children.Add(T($"{installation.Version}  ·  127.0.0.1:{installation.Port}  ·  {siteCount} {(siteCount == 1 ? "site" : "sites")}", 11, muted: true, margin: new Thickness(0, 5, 0, 0)));
+            labels.Children.Add(title); labels.Children.Add(T($"{installation.Version}  ·  127.0.0.1:{installation.Port}", 11, muted: true, margin: new Thickness(0, 5, 0, 0)));
             var status = T(string.Empty, 11, muted: true, margin: new Thickness(0, 5, 0, 0)); labels.Children.Add(status); Grid.SetColumn(labels, 1); grid.Children.Add(labels);
             var retained = _snapshot.RetainedPhpVersions.Count(version => version.Channel == installation.Channel);
             if (retained > 0) labels.Children.Add(T($"{retained} previous {(retained == 1 ? "patch" : "patches")} available in actions", 11, muted: true, margin: new Thickness(0, 5, 0, 0)));
@@ -367,7 +405,6 @@ internal sealed class ManagerWindow : Window
             rows.Children.Add(RowSurface(grid)); _phpRows[installation.Id] = new PhpRow(installation, status, toggle);
         }
         rows.Children.Add(T($"CLI default: PHP {_snapshot.DefaultPhpChannel ?? "not selected"}", 11, muted: true, margin: new Thickness(1, 5, 0, 0)));
-        _contentHost.Children.Add(Scroll(rows));
     }
 
     private void UpdatePhpRow(PhpRow row)
@@ -399,7 +436,7 @@ internal sealed class ManagerWindow : Window
             foreach (var version in retained)
             {
                 var option = Menu($"Switch to PHP {version.Version}", () => SwitchPhpVersionAsync(version), !Busy);
-                option.ToolTip = "Keep this channel's sites, port, extensions, and CLI selection. A running channel and dependent Nginx briefly restart.";
+                option.ToolTip = "Keep this channel's port, extensions, and CLI selection. A running channel briefly restarts.";
                 versions.Items.Add(option);
             }
             yield return versions;
@@ -409,66 +446,18 @@ internal sealed class ManagerWindow : Window
         yield return Menu("Open runtime folder", () => OpenPathAsync(installation.Directory));
     }
 
-    private void BuildSites()
+    private void BuildCaddy()
     {
-        Heading("Nginx", "Manage local sites and their configuration.");
-        var create = ActionButton("Create site", ShowCreateSiteAsync, "PrimaryButtonStyle", AppIcon.Plus, enabled: () => !Busy && _snapshot.PhpInstallations.Count > 0); _pageActions.Children.Add(create);
-        _pageActions.Children.Add(ActionButton("Open config folder", () => OpenPathAsync(Path.Combine(_snapshot.DataDirectory, "user", "nginx")), "SecondaryButtonStyle", AppIcon.Folder, "Open Nginx configuration folder", independent: true));
-        if (_snapshot.Sites.Count == 0)
-        {
-            var hasPhp = _snapshot.PhpInstallations.Count > 0;
-            _contentHost.Children.Add(Empty(AppIcon.Sites, "Your next project starts here", "Connect a document root, choose PHP, and give your project a local address.", hasPhp ? "Create site" : "Install PHP first", hasPhp ? ShowCreateSiteAsync : () => OpenInstallAsync(ServiceKind.Php), HasRuntime(ServiceKind.Nginx) ? "Open Nginx configuration" : "Install Nginx", HasRuntime(ServiceKind.Nginx) ? () => OpenPathAsync(Path.Combine(_snapshot.DataDirectory, "user", "nginx")) : () => OpenInstallAsync(ServiceKind.Nginx)));
-            return;
-        }
+        Heading("Caddy", "Local HTTPS proxy for FrankenPHP and PHP NTS.");
+        if (!HasRuntime(ServiceKind.Caddy)) _pageActions.Children.Add(ActionButton("Install Caddy", () => OpenInstallAsync(ServiceKind.Caddy), "PrimaryButtonStyle", AppIcon.Download));
+        _pageActions.Children.Add(ActionButton("Edit configuration", () => OpenEditorAsync(Path.Combine(_snapshot.DataDirectory, "settings.json")), "SecondaryButtonStyle", AppIcon.Folder));
         var rows = new StackPanel();
-        if (!HasRuntime(ServiceKind.Nginx)) rows.Children.Add(InlineNotice("Install Nginx to serve these sites.", "Install Nginx", () => OpenInstallAsync(ServiceKind.Nginx)));
-        foreach (var site in _snapshot.Sites)
-        {
-            var grid = new Grid(); grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var info = new StackPanel { Margin = new Thickness(0, 0, 10, 0) };
-            var title = new WrapPanel { VerticalAlignment = VerticalAlignment.Center }; var hostname = T(site.Hostname, 14, true); hostname.VerticalAlignment = VerticalAlignment.Center; hostname.Margin = new Thickness(0, 0, 12, 0); title.Children.Add(hostname);
-            var picker = new ComboBox { ItemsSource = _snapshot.PhpInstallations.Select(p => p.Channel).Append(site.PhpChannel).Distinct().Select(channel => new { Channel = channel, Label = "PHP " + channel }).ToArray(), DisplayMemberPath = "Label", SelectedValuePath = "Channel", SelectedValue = site.PhpChannel, MinWidth = 100, MinHeight = 36, FontSize = 12 };
-            AutomationProperties.SetName(picker, $"PHP version for {site.Hostname}");
-            var changing = false;
-            picker.SelectionChanged += async (_, _) =>
-            {
-                if (changing || picker.SelectedValue is not string channel || channel == site.PhpChannel || Busy) return;
-                changing = true;
-                try { await RunAsync($"Switching {site.Hostname} to PHP {channel}…", () => _manager.SaveSiteAsync(site with { PhpChannel = channel }, _lifetime.Token)); }
-                finally { picker.SelectedValue = _snapshot.Sites.FirstOrDefault(current => current.Id == site.Id)?.PhpChannel ?? site.PhpChannel; changing = false; }
-            };
-            picker.IsEnabled = !Busy;
-            _siteVersionPickers.Add(picker);
-            title.Children.Add(picker); info.Children.Add(title);
-            var enabled = Badge(site.Enabled ? "✓ Enabled" : "○ Disabled", "HoverBrush", new Thickness(0, 8, 0, 0)); enabled.HorizontalAlignment = HorizontalAlignment.Left; if (enabled.Child is TextBlock enabledText) { enabledText.FontSize = 12; enabledText.SetResourceReference(TextBlock.ForegroundProperty, site.Enabled ? "SuccessBrush" : "MutedBrush"); } info.Children.Add(enabled);
-            info.Children.Add(T(site.DocumentRoot, 11, muted: true, margin: new Thickness(0, 7, 0, 0)));
-            info.Children.Add(T($"Port {site.Port}", 11, muted: true, margin: new Thickness(0, 5, 0, 0))); grid.Children.Add(info);
-            var actions = MoreButton($"{site.Hostname} actions", () => SiteMenu(site)); actions.VerticalAlignment = VerticalAlignment.Top; Grid.SetColumn(actions, 1); grid.Children.Add(actions); rows.Children.Add(RowSurface(grid));
-        }
-        rows.Children.Add(T("Custom hostnames must resolve to 127.0.0.1 on this PC.", 11, muted: true, margin: new Thickness(1, 6, 0, 0)));
+        rows.Children.Add(T("Manage hostnames, document roots and PHP versions in Sites.", 12, muted: true));
+        foreach (var runtime in _snapshot.Services.Where(s => s.Kind is ServiceKind.Caddy or ServiceKind.FrankenPhp))
+            rows.Children.Add(T($"{runtime.DisplayName} · {StatusLabel(runtime.Status)}  {runtime.Endpoint}", 13, margin: new Thickness(0, 12, 0, 0)));
         _contentHost.Children.Add(Scroll(rows));
     }
 
-    private IEnumerable<MenuItem> SiteMenu(SiteDefinition site)
-    {
-        yield return Menu(site.Enabled ? "Disable site" : "Enable site", () => RunAsync("Updating site…", () => _manager.SetSiteEnabledAsync(site.Id, !site.Enabled, _lifetime.Token)), !Busy);
-        yield return Menu("Edit config", () => OpenEditorAsync(Path.Combine(_snapshot.DataDirectory, "user", "nginx", "sites-available", site.Id + ".conf")));
-        yield return Menu("Open site in browser", () => OpenPathAsync($"http://{site.Hostname}:{site.Port}"));
-        yield return Menu("Open document root", () => OpenPathAsync(site.DocumentRoot));
-        yield return Menu("Copy hosts entry", () => CopyTextAsync($"127.0.0.1 {site.Hostname}", "Hosts entry copied to clipboard."));
-    }
-
-    private IEnumerable<MenuItem> NginxMenu()
-    {
-        if (_snapshot.Services.FirstOrDefault(s => s.Kind == ServiceKind.Nginx && s.Status != ServiceStatus.NotInstalled) is { } nginx)
-        {
-            yield return Menu(nginx.Status == ServiceStatus.Running ? "Stop Nginx" : "Start Nginx", () => RunAsync("Updating Nginx…", () => nginx.Status == ServiceStatus.Running ? _manager.StopServiceAsync(nginx.Id, _lifetime.Token) : _manager.StartServiceAsync(nginx.Id, _lifetime.Token)), !Busy);
-            yield return Menu("Restart Nginx", () => RunAsync("Restarting Nginx…", () => _manager.RestartServiceAsync(nginx.Id, _lifetime.Token)), !Busy);
-        }
-        else yield return Menu("Install Nginx…", () => OpenInstallAsync(ServiceKind.Nginx), !Busy);
-        yield return Menu("Import Nginx…", () => BrowseRuntimeAsync(ServiceKind.Nginx), !Busy);
-        yield return Menu("Open configuration folder", () => OpenPathAsync(Path.Combine(_snapshot.DataDirectory, "user", "nginx")));
-    }
 
     private void BuildMail()
     {
@@ -617,8 +606,8 @@ internal sealed class ManagerWindow : Window
     {
         Heading(_releasePhpChannel is { } channel ? $"Update PHP {channel}" : "Install runtimes", "Official releases. Verified before they run.");
         var page = new Grid(); page.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); page.RowDefinitions.Add(new RowDefinition());
-        var kindTabs = new StackPanel { Orientation = Orientation.Horizontal };
-        foreach (var (kind, label, icon) in new[] { (ServiceKind.Php, "PHP", AppIcon.Terminal), (ServiceKind.Nginx, "Nginx", AppIcon.Globe), (ServiceKind.Mailpit, "Mailpit", AppIcon.Mail) })
+        var kindTabs = new WrapPanel();
+        foreach (var (kind, label, icon) in new[] { (ServiceKind.Caddy, "Caddy", AppIcon.Globe), (ServiceKind.FrankenPhp, "FrankenPHP", AppIcon.Terminal), (ServiceKind.Php, "PHP NTS", AppIcon.Terminal), (ServiceKind.Mailpit, "Mailpit", AppIcon.Mail) })
         {
             var tab = ActionButton(label, async () =>
             {
@@ -634,16 +623,18 @@ internal sealed class ManagerWindow : Window
     private void UpdateInstall()
     {
         if (_releaseContent is null) return;
-        var signature = $"{_releaseKind}:{_releasePhpChannel}:{_releaseCheckComplete}:{_selectedReleaseId}:{_releaseError}:{string.Join('|', _releases.Select(r => r.Id))}:{string.Join('|', _snapshot.PhpInstallations.Select(p => $"{p.Channel}:{p.Version}"))}:{HasRuntime(ServiceKind.Nginx)}:{HasRuntime(ServiceKind.Mailpit)}";
+        var signature = $"{_releaseKind}:{_releasePhpChannel}:{_releaseCheckComplete}:{_selectedReleaseId}:{_releaseError}:{string.Join('|', _releases.Select(r => r.Id))}:{string.Join('|', _snapshot.PhpInstallations.Select(p => $"{p.Channel}:{p.Version}"))}:{HasRuntime(ServiceKind.Mailpit)}:{string.Join(',', _snapshot.Services.Where(s => s.Status != ServiceStatus.NotInstalled).Select(s => s.Id))}";
         if (_releaseSignature != signature)
         {
             _releaseSignature = signature; _downloadPanel = null;
             _bodyButtons.RemoveAll(registration => Equals(registration.Button.Tag, "ReleaseStage"));
             var page = new StackPanel();
-            if (_releaseError is { Length: > 0 }) page.Children.Add(InlineNotice(_releaseError));
+            if (_releaseError is { Length: > 0 }) page.Children.Add(_visualCppRetryId == _selectedReleaseId && _releases.FirstOrDefault(r => r.Id == _visualCppRetryId) is { } retry
+                ? InlineNotice(_releaseError, "Install Visual C++ x64 and retry", () => InstallSelectedReleaseAsync(retry, true))
+                : InlineNotice(_releaseError));
             if (_releases.Count == 0)
             {
-                var type = _releaseKind == ServiceKind.Php ? _releasePhpChannel is { } phpChannel ? $"PHP {phpChannel}" : "PHP" : _releaseKind == ServiceKind.Nginx ? "Nginx" : "Mailpit";
+                var type = _releaseKind == ServiceKind.Php ? _releasePhpChannel is { } phpChannel ? $"PHP {phpChannel}" : "PHP NTS" : _releaseKind == ServiceKind.FrankenPhp ? "FrankenPHP" : _releaseKind.ToString();
                 var failed = !string.IsNullOrWhiteSpace(_releaseError);
                 page.Children.Add(Empty(AppIcon.Download, failed ? "Could not load releases" : _releaseCheckComplete ? "No compatible releases found" : $"Add {type} to your workspace", failed ? "Check your connection and try again, or import an extracted runtime." : _releaseCheckComplete ? "Refresh the release list or import a downloaded distribution." : "Choose a release from the official publisher. Nothing downloads until you install.", failed ? "Retry release check" : _releaseCheckComplete ? "Refresh releases" : $"Find {type} releases", CheckReleasesAsync, "Import a downloaded runtime", () => BrowseRuntimeAsync(_releaseKind)));
             }
@@ -664,15 +655,15 @@ internal sealed class ManagerWindow : Window
                     card.Children.Add(T($"Active PHP {installed.Version}  ·  Selected PHP {PhpPatch(selected.Version)}", 12, true, margin: new Thickness(0, 15, 0, 0)));
                     if (PhpPatch(selected.Version) != installed.Version)
                     {
-                        card.Children.Add(T("Sites, port, extensions, and CLI selection stay with this channel. The current patch is kept for rollback.", 11, muted: true, margin: new Thickness(0, 8, 0, 0)));
-                        card.Children.Add(T("Running PHP and dependent Nginx briefly restart; stopped channels stay stopped. If activation fails, the manager attempts to restore the previous patch.", 11, muted: true, margin: new Thickness(0, 8, 0, 0)));
+                        card.Children.Add(T("Port, extensions, and CLI selection stay with this channel. The current patch is kept for rollback.", 11, muted: true, margin: new Thickness(0, 8, 0, 0)));
+                        card.Children.Add(T("Running PHP briefly restarts; stopped channels stay stopped. If activation fails, the manager attempts to restore the previous patch.", 11, muted: true, margin: new Thickness(0, 8, 0, 0)));
                     }
                 }
                 var reason = InstallationBlockReason(selected);
                 if (reason is not null) card.Children.Add(T(reason, 12, muted: true, margin: new Thickness(0, 12, 0, 0)));
                 var install = ActionButton(reason is null ? InstallActionLabel(selected) : HasInstallationFor(selected) ? "Already installed" : "Unavailable", retained is null ? () => InstallSelectedReleaseAsync(selected) : () => SwitchPhpVersionAsync(retained), "PrimaryButtonStyle", retained is null ? AppIcon.Download : AppIcon.Restart, enabled: () => !Busy && InstallationBlockReason(selected) is null); install.HorizontalAlignment = HorizontalAlignment.Left; install.Margin = new Thickness(0, 20, 0, 0); card.Children.Add(install);
                 page.Children.Add(new Border { Child = card, Padding = new Thickness(18) });
-                page.Children.Add(T(_releaseKind == ServiceKind.Php ? "Switch to a retained patch from the PHP runtime's actions menu." : "Updates to installed Nginx and Mailpit runtimes are not available yet.", 11, muted: true, margin: new Thickness(1, 12, 0, 0)));
+                page.Children.Add(T(_releaseKind == ServiceKind.Php ? "Switch to a retained patch from the PHP runtime's actions menu." : _releaseKind == ServiceKind.FrankenPhp ? "Each installed version is available in Sites." : "Import an extracted distribution or install a verified release.", 11, muted: true, margin: new Thickness(1, 12, 0, 0)));
                 var import = ActionButton("Import extracted runtime…", () => BrowseRuntimeAsync(_releaseKind), "QuietButtonStyle", AppIcon.Folder);
                 import.HorizontalAlignment = HorizontalAlignment.Left;
                 import.Margin = new Thickness(0, 8, 0, 0);
@@ -758,17 +749,6 @@ internal sealed class ManagerWindow : Window
 
     internal Task PreparePhpUpdatesForSmokeAsync(string channel) => OpenPhpUpdatesAsync(channel);
 
-    internal async Task SetSitePhpForSmokeAsync(string hostname, string channel)
-    {
-        var picker = _siteVersionPickers.FirstOrDefault(control => AutomationProperties.GetName(control) == $"PHP version for {hostname}")
-            ?? throw new InvalidOperationException("Site version picker not found.");
-        picker.SelectedValue = channel;
-        var deadline = Environment.TickCount64 + 15000;
-        while (Busy && Environment.TickCount64 < deadline) await Task.Delay(20);
-        if (Busy || _snapshot.Sites.FirstOrDefault(site => site.Hostname == hostname)?.PhpChannel != channel)
-            throw new InvalidOperationException(_error ?? "The site version selection did not commit.");
-    }
-
     internal void SetMailSearchForSmoke(string query)
     {
         if (_mailSearch is null) throw new InvalidOperationException("Open a nonempty running inbox before testing search.");
@@ -802,25 +782,17 @@ internal sealed class ManagerWindow : Window
     private async Task BrowseRuntimeAsync(ServiceKind kind)
     {
         using var hold = HoldFocus();
-        var executable = kind switch { ServiceKind.Php => "php.exe", ServiceKind.Nginx => "nginx.exe", _ => "mailpit.exe" };
+        var executable = kind switch { ServiceKind.Php => "php.exe", ServiceKind.Caddy => "caddy.exe", ServiceKind.FrankenPhp => "frankenphp.exe", _ => "mailpit.exe" };
         var picker = new OpenFileDialog { Title = $"Select {executable} from an extracted distribution", Filter = $"{executable}|{executable}|Executables|*.exe", CheckFileExists = true, Multiselect = false };
         if (picker.ShowDialog(this) != true) return;
         await RunAsync($"Validating {kind} runtime…", () => kind switch
         {
+            ServiceKind.Caddy or ServiceKind.FrankenPhp => _manager.RegisterWebRuntimeAsync(kind, picker.FileName),
             ServiceKind.Php => _manager.RegisterPhpAsync(picker.FileName),
-            ServiceKind.Nginx => _manager.RegisterNginxAsync(picker.FileName),
             _ => _manager.RegisterMailpitAsync(picker.FileName),
         });
     }
 
-    private async Task ShowCreateSiteAsync()
-    {
-        if (_snapshot.PhpInstallations.Count == 0) { ShowError("Add a PHP runtime before creating a managed PHP site."); return; }
-        using var hold = HoldFocus();
-        var dialog = new SiteDialog(_snapshot.PhpInstallations.Select(p => p.Channel).Distinct().ToArray()) { Owner = this };
-        if (dialog.ShowDialog() != true || dialog.Site is null) return;
-        await RunAsync("Creating site and validating Nginx…", () => _manager.SaveSiteAsync(dialog.Site));
-    }
 
     private Task ShowExtensionsAsync(string channel)
     {
@@ -832,6 +804,7 @@ internal sealed class ManagerWindow : Window
 
     private Task CheckReleasesAsync() => RunAsync("Reading official release metadata…", async () =>
     {
+        _visualCppRetryId = null;
         _releaseError = null;
         try
         {
@@ -850,11 +823,12 @@ internal sealed class ManagerWindow : Window
         }
     });
 
-    private Task InstallSelectedReleaseAsync(RuntimeRelease release) => RunAsync($"Installing {release.DisplayName}…", async () =>
+    private Task InstallSelectedReleaseAsync(RuntimeRelease release, bool installVisualCpp = false) => RunAsync($"Installing {release.DisplayName}…", async () =>
     {
         if (InstallationBlockReason(release) is { } reason) throw new InvalidOperationException(reason);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _installCancellation = cancellation;
+        _visualCppRetryId = null;
         _releaseError = null;
         _installProgress = new RuntimeInstallProgress("Preparing download…");
         Render(_snapshot);
@@ -873,6 +847,17 @@ internal sealed class ManagerWindow : Window
                     Render(_manager.Snapshot);
                 }
             });
+            if (installVisualCpp)
+            {
+                var restart = await PhpDevTray.Infrastructure.Runtimes.VisualCppInstaller.InstallAsync(progress, cancellation.Token);
+                if (restart)
+                {
+                    _installProgress = new("Restart Windows to finish Visual C++ setup, then retry PHP installation.");
+                    return;
+                }
+                installVisualCpp = false;
+                cancellation.Token.ThrowIfCancellationRequested();
+            }
             await _manager.InstallReleaseAsync(release.Id, progress, cancellation.Token);
             _installProgress = new RuntimeInstallProgress($"Installed {release.DisplayName}", _installProgress?.BytesReceived ?? 0, _installProgress?.TotalBytes);
         }
@@ -880,7 +865,8 @@ internal sealed class ManagerWindow : Window
         { _installProgress = new RuntimeInstallProgress("Installation cancelled. Any completed registration is shown in the runtime list."); }
         catch (Exception exception)
         {
-            _releaseError = $"Installation failed: {exception.Message} Retry the official download or import an extracted distribution.";
+            _visualCppRetryId = exception is VisualCppRuntimeException || installVisualCpp ? release.Id : null;
+            _releaseError = _visualCppRetryId is not null ? exception.Message : $"Installation failed: {exception.Message} Retry the official download or import an extracted distribution.";
             _installProgress = new RuntimeInstallProgress("Installation failed");
         }
         finally { _installCancellation = null; }
@@ -894,11 +880,10 @@ internal sealed class ManagerWindow : Window
                 return $"PHP {installed.Version} is already active for this channel.";
             if (RetainedPhpFor(release) is not null) return null;
         }
-        else if (_snapshot.Services.Any(s => s.Kind == release.Kind && s.Status != ServiceStatus.NotInstalled))
+        else if (HasInstallationFor(release))
             return "Already installed. Updates are not available yet.";
         var checksumAvailable = release.Sha256 is { Length: 64 } digest && digest.All(Uri.IsHexDigit);
-        var signatureAvailable = release.SignatureUri is { IsAbsoluteUri: true } signature && signature.Scheme == Uri.UriSchemeHttps;
-        if (!checksumAvailable && !signatureAvailable)
+        if (!checksumAvailable)
             return "This release cannot be verified. You can import an official downloaded runtime instead.";
         return null;
     }
@@ -1122,7 +1107,7 @@ internal sealed class ManagerWindow : Window
     private bool MailIsRunning => _snapshot.Services.Any(service => service.Kind == ServiceKind.Mailpit && service.Status == ServiceStatus.Running);
     private bool HasInstallationFor(RuntimeRelease release) => release.Kind == ServiceKind.Php
         ? InstalledPhpFor(release)?.Version == PhpPatch(release.Version)
-        : HasRuntime(release.Kind);
+        : release.Kind == ServiceKind.FrankenPhp ? _snapshot.Services.Any(s => s.Id == "franken-v" + release.Version.Replace('.', '-') && s.Status != ServiceStatus.NotInstalled) : HasRuntime(release.Kind);
     private bool AnyRunning => _snapshot.Services.Any(s => s.Status is ServiceStatus.Running or ServiceStatus.Starting or ServiceStatus.Stopping);
     private ServiceSnapshot? PhpService(PhpInstallation installation) => _snapshot.Services.FirstOrDefault(s => s.Kind == ServiceKind.Php && s.Version == installation.Version) ?? _snapshot.Services.FirstOrDefault(s => s.Kind == ServiceKind.Php && s.Id.Contains(installation.Channel, StringComparison.Ordinal));
     private static bool IsTransition(ServiceStatus status) => status is ServiceStatus.Starting or ServiceStatus.Stopping or ServiceStatus.Restarting or ServiceStatus.Updating;

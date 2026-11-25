@@ -6,11 +6,6 @@ using System.Text.Json;
 using PhpDevTray.Core;
 using PhpDevTray.Infrastructure.Downloads;
 using PhpDevTray.Infrastructure.Releases;
-using Org.BouncyCastle.Bcpg;
-using Org.BouncyCastle.Bcpg.OpenPgp;
-using Org.BouncyCastle.Crypto;
-using Org.BouncyCastle.Crypto.Generators;
-using Org.BouncyCastle.Security;
 
 namespace PhpDevTray.Checks;
 
@@ -22,11 +17,16 @@ public static class DownloadChecks
         Directory.CreateDirectory(directory);
         try
         {
+            var fixture = new RuntimeRelease { Id = "fp", Kind = ServiceKind.FrankenPhp, Version = "1.9.9", Channel = "8.5",
+                DisplayName = "Fixture", DownloadUri = new Uri("https://example.invalid/archive.zip") };
+            var catalog = RuntimeReleaseManager.LatestForEachPhpMinor([fixture, fixture with { Version = "1.10.0" },
+                fixture with { Channel = "8.6" }, fixture with { Channel = null }]);
+            Require(catalog.Length == 2 && catalog[0].Channel == "8.6" && catalog[1].Version == "1.10.0",
+                "Offer the newest FrankenPHP version once per known PHP minor.");
             await CheckChecksumsAsync(directory);
-            await CheckDetachedSignaturesAsync(directory);
             await CheckArchivesAsync(directory);
             await CheckReleaseTrustAsync(directory);
-            Console.WriteLine("PASS: publisher checksums, pinned detached signatures, and tamper/unknown-signer rejection.");
+            Console.WriteLine("PASS: publisher checksums, and tamper rejection.");
             Console.WriteLine("PASS: ZIP traversal, alternate streams, device names, symlinks, collisions, bombs, and cancellation cleanup.");
             Console.WriteLine("PASS: fresh trusted release resolution, Windows PHP rebuild suffixes, redirect allowlists, and disposable download staging.");
         }
@@ -41,38 +41,6 @@ public static class DownloadChecks
         await ArtifactIntegrity.VerifySha256Async(artifact, digest);
         await ExpectAsync<InvalidDataException>(() => ArtifactIntegrity.VerifySha256Async(artifact, new string('0', 64)), "Tampered archives must fail checksum verification.");
         await ExpectAsync<InvalidDataException>(() => ArtifactIntegrity.VerifySha256Async(artifact, "not a digest"), "Missing or malformed checksums must not become an integrity bypass.");
-    }
-
-    private static async Task CheckDetachedSignaturesAsync(string directory)
-    {
-        var artifact = Path.Combine(directory, "signed.bin");
-        var content = Encoding.UTF8.GetBytes("signed runtime archive fixture\n");
-        await File.WriteAllBytesAsync(artifact, content);
-        var generator = new RsaKeyPairGenerator();
-        generator.Init(new KeyGenerationParameters(new SecureRandom(), 2048));
-        var keys = new PgpKeyPair(PublicKeyAlgorithmTag.RsaSign, generator.GenerateKeyPair(), DateTime.UtcNow.AddMinutes(-1));
-        using var publicStream = new MemoryStream();
-        keys.PublicKey.Encode(publicStream);
-        var ring = publicStream.ToArray();
-        var fingerprint = Convert.ToHexString(keys.PublicKey.GetFingerprint());
-        var pins = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { fingerprint };
-        var signature = Sign(keys, content, HashAlgorithmTag.Sha256);
-        await ArtifactIntegrity.VerifyDetachedAsync(artifact, signature, [ring], pins);
-        await ExpectAsync<InvalidDataException>(() => ArtifactIntegrity.VerifyDetachedAsync(artifact, signature, [ring], new HashSet<string>()), "Unknown signing fingerprints must fail even if the signature is mathematically valid.");
-        await File.WriteAllTextAsync(artifact, "tampered archive");
-        await ExpectAsync<InvalidDataException>(() => ArtifactIntegrity.VerifyDetachedAsync(artifact, signature, [ring], pins), "Tampering must invalidate a pinned signature.");
-        await File.WriteAllBytesAsync(artifact, content);
-        await ExpectAsync<InvalidDataException>(() => ArtifactIntegrity.VerifyDetachedAsync(artifact, Sign(keys, content, HashAlgorithmTag.Sha1), [ring], pins), "Weak signature hashes must fail closed.");
-    }
-
-    private static byte[] Sign(PgpKeyPair keys, byte[] content, HashAlgorithmTag hash)
-    {
-        var generator = new PgpSignatureGenerator(PublicKeyAlgorithmTag.RsaSign, hash);
-        generator.InitSign(PgpSignature.BinaryDocument, keys.PrivateKey);
-        generator.Update(content);
-        using var output = new MemoryStream();
-        generator.Generate().Encode(output);
-        return output.ToArray();
     }
 
     private static async Task CheckArchivesAsync(string directory)
@@ -138,16 +106,11 @@ public static class DownloadChecks
         handler.TamperArchive = false;
         handler.RedirectArchiveOutsidePublisher = true;
         await ExpectAsync<InvalidDataException>(() => manager.DownloadAsync(releases[0].Id), "Off-publisher redirects must fail closed.");
-        Require(handler.Requests.All(uri => uri.Host is "downloads.php.net" or "nginx.org" or "api.github.com"), "A rejected redirect target must never be requested.");
+        Require(handler.Requests.All(uri => uri.Host is "downloads.php.net" or "api.github.com"), "A rejected redirect target must never be requested.");
         handler.RedirectArchiveOutsidePublisher = false;
-        var nginx = await manager.GetReleasesAsync(ServiceKind.Nginx);
-        Require(nginx[0].SignatureUri is null, "Unsigned release metadata must accurately show verification unavailable.");
-        var beforeRequests = handler.Requests.Count;
-        await ExpectAsync<NotSupportedException>(() => manager.DownloadAsync(nginx[0].Id), "Missing signatures must disable automatic Nginx installation.");
-        Require(handler.Requests.Skip(beforeRequests).All(uri => uri.AbsolutePath.EndsWith("download.html", StringComparison.Ordinal)), "Unsigned Nginx archives must not even be downloaded.");
         await ExpectAsync<InvalidOperationException>(() => manager.DownloadAsync("php:https://attacker.invalid/x"), "Caller-controlled IDs must not become download URLs.");
-        RequireThrows<InvalidDataException>(() => RuntimeReleaseManager.ValidatePublisherUri(new("http://nginx.org/download/nginx-1.2.3.zip"), ServiceKind.Nginx), "HTTP downgrade must be rejected.");
-        RequireThrows<InvalidDataException>(() => RuntimeReleaseManager.ValidatePublisherUri(new("https://nginx.org.attacker.invalid/download/nginx-1.2.3.zip"), ServiceKind.Nginx), "Lookalike publisher hosts must be rejected.");
+        RequireThrows<InvalidDataException>(() => RuntimeReleaseManager.ValidatePublisherUri(new("http://downloads.php.net/~windows/releases/test.zip"), ServiceKind.Php), "HTTP downgrade must be rejected.");
+        RequireThrows<InvalidDataException>(() => RuntimeReleaseManager.ValidatePublisherUri(new("https://downloads.php.net.attacker.invalid/~windows/releases/test.zip"), ServiceKind.Php), "Lookalike publisher hosts must be rejected.");
     }
 
     private static byte[] PeExecutable()
@@ -215,8 +178,6 @@ public static class DownloadChecks
                 };
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(metadata)) });
             }
-            if (uri.Host == "nginx.org") return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                { Content = new StringContent("<a href=\"/download/nginx-1.30.0.zip\">Windows</a>") });
             if (RedirectArchiveOutsidePublisher) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Found)
                 { Headers = { Location = new Uri("https://attacker.invalid/runtime.zip") } });
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)

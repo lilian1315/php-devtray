@@ -22,14 +22,13 @@ public interface IEnvironmentManager : IAsyncDisposable
     Task StartServiceAsync(string id, CancellationToken cancellationToken = default);
     Task StopServiceAsync(string id, CancellationToken cancellationToken = default);
     Task RestartServiceAsync(string id, CancellationToken cancellationToken = default);
+    Task SaveSiteAsync(WebSite site, CancellationToken cancellationToken = default);
+    Task RegisterWebRuntimeAsync(ServiceKind kind, string executable, CancellationToken cancellationToken = default);
     Task RegisterPhpAsync(string phpExecutable, CancellationToken cancellationToken = default);
     Task ActivatePhpVersionAsync(string channel, string version, CancellationToken cancellationToken = default);
-    Task RegisterNginxAsync(string nginxExecutable, CancellationToken cancellationToken = default);
     Task RegisterMailpitAsync(string mailpitExecutable, CancellationToken cancellationToken = default);
     Task SetDefaultPhpAsync(string channel, CancellationToken cancellationToken = default);
     Task SetPathIntegrationAsync(bool enabled, CancellationToken cancellationToken = default);
-    Task SaveSiteAsync(SiteDefinition site, CancellationToken cancellationToken = default);
-    Task SetSiteEnabledAsync(string id, bool enabled, CancellationToken cancellationToken = default);
     Task SetLastSectionAsync(string section, CancellationToken cancellationToken = default);
     Task SetThemeAsync(ThemePreference theme, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<MailMessageSummary>> GetMessagesAsync(CancellationToken cancellationToken = default);

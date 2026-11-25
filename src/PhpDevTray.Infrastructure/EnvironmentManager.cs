@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using PhpDevTray.Core;
 using PhpDevTray.Infrastructure.Processes;
+using PhpDevTray.Infrastructure.Configuration;
 using PhpDevTray.Infrastructure.Runtimes;
 
 namespace PhpDevTray.Infrastructure;
@@ -25,6 +26,9 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
     private readonly RuntimeCatalog _catalog;
     private readonly SemaphoreSlim _operations = new(1, 1);
     private readonly Dictionary<string, ManagedServiceDefinition> _definitions = new(StringComparer.Ordinal);
+    private SiteConfigurationWatcher? _siteWatcher;
+    private CaddyStack? _caddy;
+    private IReadOnlyDictionary<string, string?> _siteRoots = new Dictionary<string, string?>();
     private AppSettings _settings = new();
     private EnvironmentSnapshot _snapshot;
     private bool _initialized;
@@ -47,8 +51,11 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
     public Task InitializeAsync(CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
     {
         if (_initialized) return;
+        _caddy = await CaddyStack.LoadAsync(_dataDirectory, cancellationToken);
         _settings = await _catalog.LoadAsync(cancellationToken);
-        foreach (var site in _settings.Sites) await _catalog.EnsureSiteSourceAsync(site, cancellationToken);
+        await RefreshSiteRootsAsync(cancellationToken);
+        _siteWatcher = new SiteConfigurationWatcher(Path.Combine(_dataDirectory, "user", "caddy", "sites"),
+            RefreshChangedSitesAsync, error => Log("Error", "Site configuration refresh failed. " + error.Message));
         _initialized = true;
         await _catalog.UpdateCliSelectionAsync(_settings, cancellationToken);
         if (_settings.StartServicesOnLaunch) await StartAllCoreAsync(cancellationToken);
@@ -56,7 +63,15 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
     }, cancellationToken);
 
     public Task RefreshAsync(CancellationToken cancellationToken = default) => ExecuteAsync(
-        () => Task.CompletedTask, cancellationToken);
+        async () =>
+        {
+            if (!_supervisor.Snapshots.Any(s => s.Status == ServiceStatus.Running))
+            {
+                _caddy = await CaddyStack.LoadAsync(_dataDirectory, cancellationToken);
+                _settings = await _catalog.LoadAsync(cancellationToken);
+            }
+            await RefreshSiteRootsAsync(cancellationToken);
+        }, cancellationToken);
 
     public Task StartAllAsync(CancellationToken cancellationToken = default) => ExecuteAsync(
         () => StartAllCoreAsync(cancellationToken), cancellationToken);
@@ -64,9 +79,7 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
     private async Task StartAllCoreAsync(CancellationToken cancellationToken)
     {
         if (_settings.MailpitExecutable is not null) await StartCoreAsync("mailpit", cancellationToken);
-        foreach (var runtime in _settings.PhpInstallations)
-            await StartCoreAsync($"php:{runtime.Channel}", cancellationToken);
-        if (_settings.NginxDirectory is not null) await StartCoreAsync("nginx", cancellationToken);
+        if (_caddy is not null && _caddy.Sites.Any(site => site.Enabled)) await StartCoreAsync("caddy", cancellationToken);
     }
 
     public Task StopAllAsync(CancellationToken cancellationToken = default) => ExecuteAsync(
@@ -84,12 +97,34 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
     {
         if (_supervisor.IsRunning(id)) return;
         ManagedServiceDefinition definition;
-        if (id == "nginx")
+        if (id == "caddy" && _caddy is not null)
         {
-            foreach (var channel in _settings.Sites.Where(s => s.Enabled).Select(s => s.PhpChannel).Distinct())
-                await StartCoreAsync($"php:{channel}", cancellationToken);
-            definition = await _catalog.BuildNginxAsync(_settings, cancellationToken);
+            var started = new Stack<string>();
+            try
+            {
+                var prepared = await _caddy.PrepareAsync(_dataDirectory, _supervisor, _settings, cancellationToken);
+                foreach (var idNts in _caddy.Sites.Where(s => s.Enabled && s.RuntimeId.StartsWith("php:", StringComparison.Ordinal)).Select(s => s.RuntimeId).Distinct())
+                {
+                    if (_supervisor.IsRunning(idNts)) continue;
+                    await StartCoreAsync(idNts, cancellationToken);
+                    started.Push(idNts);
+                }
+                foreach (var service in prepared)
+                {
+                    if (_supervisor.IsRunning(service.Id)) continue;
+                    await _supervisor.StartAsync(service, cancellationToken);
+                    started.Push(service.Id);
+                }
+            }
+            catch
+            {
+                foreach (var service in started) await _supervisor.StopAsync(service, TimeSpan.FromSeconds(5), CancellationToken.None);
+                throw;
+            }
+            return;
         }
+        if (id.StartsWith("franken-", StringComparison.Ordinal) && _caddy?.Runtimes.Any(r => "franken-" + r.Id == id) == true)
+            definition = (await _caddy.PrepareAsync(_dataDirectory, _supervisor, _settings, cancellationToken, id)).Single();
         else if (id == "mailpit") definition = await _catalog.BuildMailpitAsync(_settings, cancellationToken);
         else if (id.StartsWith("php:", StringComparison.Ordinal))
         {
@@ -105,32 +140,28 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
 
     public Task StopServiceAsync(string id, CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
     {
-        await _supervisor.StopAsync(id, TimeSpan.FromSeconds(id == "nginx" ? 20 : 5), cancellationToken);
+        await StopCoreAsync(id, cancellationToken);
         Log("Information", $"Stopped {id}");
     }, cancellationToken);
 
     public Task RestartServiceAsync(string id, CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
     {
-        var dependentNginx = id.StartsWith("php:", StringComparison.Ordinal) && _supervisor.IsRunning("nginx") &&
-            _settings.Sites.Any(s => s.Enabled && s.PhpChannel == id[4..]);
-        if (dependentNginx) await _supervisor.StopAsync("nginx", TimeSpan.FromSeconds(20), cancellationToken);
-        await _supervisor.StopAsync(id, TimeSpan.FromSeconds(5), cancellationToken);
+        await StopCoreAsync(id, cancellationToken);
         await StartCoreAsync(id, cancellationToken);
-        if (dependentNginx) await StartCoreAsync("nginx", cancellationToken);
     }, cancellationToken);
+
+    private async Task StopCoreAsync(string id, CancellationToken token)
+    {
+        await _supervisor.StopAsync(id, TimeSpan.FromSeconds(id == "caddy" ? 20 : 5), token);
+        if (id == "caddy")
+            foreach (var backend in _supervisor.Snapshots.Where(s => s.Kind == ServiceKind.FrankenPhp && _supervisor.IsRunning(s.Id)))
+                await _supervisor.StopAsync(backend.Id, TimeSpan.FromSeconds(5), token);
+    }
 
     public Task RegisterPhpAsync(string phpExecutable, CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
     {
         await ImportAndActivatePhpCoreAsync(phpExecutable, cancellationToken);
         Log("Information", "Imported and activated PHP distribution");
-    }, cancellationToken);
-
-    public Task RegisterNginxAsync(string nginxExecutable, CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
-    {
-        if (_supervisor.IsRunning("nginx")) throw new InvalidOperationException("Stop Nginx before importing a distribution.");
-        var directory = await _catalog.ImportNginxAsync(nginxExecutable, cancellationToken);
-        await CommitSettingsAsync(_settings with { NginxDirectory = directory }, cancellationToken);
-        Log("Information", "Imported Nginx distribution");
     }, cancellationToken);
 
     public Task RegisterMailpitAsync(string mailpitExecutable, CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
@@ -162,90 +193,6 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
             throw;
         }
     }, cancellationToken);
-
-    public Task SaveSiteAsync(SiteDefinition site, CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
-    {
-        ValidateSite(site);
-        if (!_settings.PhpInstallations.Any(p => p.Channel == site.PhpChannel))
-            throw new InvalidOperationException("Select an installed PHP channel for this site.");
-        await _catalog.EnsureSiteSourceAsync(site, cancellationToken);
-        var proposed = _settings with { Sites = [.. _settings.Sites.Where(s => s.Id != site.Id), site] };
-        await ApplySiteSettingsAsync(proposed, cancellationToken);
-    }, cancellationToken);
-
-    public Task SetSiteEnabledAsync(string id, bool enabled, CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
-    {
-        var site = _settings.Sites.FirstOrDefault(s => s.Id == id)
-            ?? throw new InvalidOperationException("Site no longer exists.");
-        await ApplySiteSettingsAsync(_settings with
-        {
-            Sites = _settings.Sites.Select(s => s.Id == id ? site with { Enabled = enabled } : s).ToArray()
-        }, cancellationToken);
-    }, cancellationToken);
-
-    private async Task ApplySiteSettingsAsync(AppSettings proposed, CancellationToken cancellationToken)
-    {
-        if (_settings.NginxDirectory is null)
-        {
-            await CommitSettingsAsync(proposed, cancellationToken);
-            return;
-        }
-        var previous = _settings;
-        var wasRunning = _supervisor.IsRunning("nginx");
-        _definitions.TryGetValue("nginx", out var oldDefinition);
-        var bootstrap = Path.Combine(_dataDirectory, "user", "nginx", "generated", "bootstrap.conf");
-        var oldBootstrap = File.Exists(bootstrap) ? await File.ReadAllBytesAsync(bootstrap, cancellationToken) : null;
-        var startedDependencies = new List<string>();
-        var bootstrapPublished = false;
-        var nginxTransitionStarted = false;
-        try
-        {
-            var candidate = await _catalog.BuildNginxAsync(proposed, cancellationToken);
-            bootstrapPublished = true;
-            if (wasRunning)
-            {
-                foreach (var channel in proposed.Sites.Where(s => s.Enabled).Select(s => s.PhpChannel).Distinct())
-                {
-                    var id = $"php:{channel}";
-                    if (_supervisor.IsRunning(id)) continue;
-                    await StartCoreAsync(id, cancellationToken);
-                    startedDependencies.Add(id);
-                }
-                nginxTransitionStarted = true;
-                await _supervisor.StopAsync("nginx", TimeSpan.FromSeconds(20), cancellationToken);
-                await _supervisor.StartAsync(candidate, cancellationToken);
-                _definitions["nginx"] = candidate;
-            }
-            await CommitSettingsAsync(proposed, cancellationToken);
-        }
-        catch (Exception operationError)
-        {
-            try
-            {
-                if (nginxTransitionStarted) await _supervisor.StopAsync("nginx", TimeSpan.FromSeconds(5), CancellationToken.None);
-                if (bootstrapPublished && oldBootstrap is not null)
-                {
-                    var temporary = bootstrap + ".rollback";
-                    await File.WriteAllBytesAsync(temporary, oldBootstrap, CancellationToken.None);
-                    File.Move(temporary, bootstrap, true);
-                }
-                else if (bootstrapPublished && File.Exists(bootstrap)) File.Delete(bootstrap);
-                if (nginxTransitionStarted && oldDefinition is not null)
-                {
-                    await _supervisor.StartAsync(oldDefinition, CancellationToken.None);
-                    _definitions["nginx"] = oldDefinition;
-                }
-                foreach (var dependency in startedDependencies)
-                    await _supervisor.StopAsync(dependency, TimeSpan.FromSeconds(5), CancellationToken.None);
-                _settings = previous;
-            }
-            catch (Exception recoveryError)
-            {
-                throw new AggregateException("Site activation failed and recovery also failed. Inspect the application log.", operationError, recoveryError);
-            }
-            throw;
-        }
-    }
 
     public Task SetLastSectionAsync(string section, CancellationToken cancellationToken = default) => ExecuteAsync(
         async () =>
@@ -313,6 +260,30 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
         }
     }
 
+    private async Task RefreshSiteRootsAsync(CancellationToken token)
+    {
+        _siteRoots = _caddy is null ? new Dictionary<string, string?>()
+            : await _caddy.ReadSiteRootsAsync(_dataDirectory, _supervisor, _settings, token);
+    }
+
+    private async Task RefreshChangedSitesAsync(IReadOnlySet<string> files, CancellationToken token)
+    {
+        await _operations.WaitAsync(token);
+        try
+        {
+            if (_disposed || _caddy is null) return;
+            var sites = _caddy.Sites.Where(site => files.Contains("*") ||
+                files.Contains(Path.GetFileName(CaddyStack.SiteFile(_dataDirectory, site.Hostname)))).ToArray();
+            if (sites.Length == 0) return;
+            var values = await (_caddy with { Sites = sites }).ReadSiteRootsAsync(_dataDirectory, _supervisor, _settings, token);
+            var updated = new Dictionary<string, string?>(_siteRoots, StringComparer.OrdinalIgnoreCase);
+            foreach (var item in values) updated[item.Key] = item.Value;
+            _siteRoots = updated;
+            Publish();
+        }
+        finally { _operations.Release(); }
+    }
+
     private void OnServiceChanged(object? sender, ServiceSnapshot snapshot) => Publish();
 
     private void Publish()
@@ -320,27 +291,33 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
         var observed = _supervisor.Snapshots.ToDictionary(s => s.Id, StringComparer.Ordinal);
         var services = new List<ServiceSnapshot>
         {
-            GetService("nginx", "Nginx", ServiceKind.Nginx, _settings.NginxDirectory is not null),
             GetService("mailpit", "Mail Trap", ServiceKind.Mailpit, _settings.MailpitExecutable is not null)
         };
+        if (_caddy is not null)
+        {
+            services.Add(GetService("caddy", "Caddy", ServiceKind.Caddy, File.Exists(_caddy.Executable)));
+            foreach (var runtime in _caddy.Runtimes)
+                services.Add(GetService("franken-" + runtime.Id, runtime.Label, ServiceKind.FrankenPhp, File.Exists(runtime.Executable)) with
+                { DisplayName = runtime.Label, Version = runtime.Version, Endpoint = $"127.0.0.1:{runtime.Port}" });
+        }
         foreach (var php in _settings.PhpInstallations)
         {
-            services.Add(GetService($"php:{php.Channel}", $"PHP {php.Channel}", ServiceKind.Php, true) with
+            services.Add(GetService($"php:{php.Channel}", $"PHP NTS {php.Channel}", ServiceKind.Php, true) with
             {
-                Version = php.Version,
+                DisplayName = $"PHP NTS {php.Version}", Version = php.Version,
                 Endpoint = $"127.0.0.1:{php.Port}",
                 IsDefault = php.Channel == _settings.DefaultPhpChannel,
-                SiteCount = _settings.Sites.Count(s => s.PhpChannel == php.Channel)
             });
         }
         Volatile.Write(ref _snapshot, new EnvironmentSnapshot
         {
             Theme = _settings.Theme,
             DataDirectory = _dataDirectory,
+            Sites = _caddy?.Sites ?? [],
+            SiteRoots = _siteRoots,
             Services = services,
             PhpInstallations = _settings.PhpInstallations,
             RetainedPhpVersions = _settings.RetainedPhpVersions,
-            Sites = _settings.Sites,
             DefaultPhpChannel = _settings.DefaultPhpChannel,
             PathIntegrationEnabled = _settings.PathIntegrationEnabled,
             LastError = _lastError,
@@ -361,19 +338,6 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
             };
     }
 
-    public static void ValidateSite(SiteDefinition site)
-    {
-        if (!Regex.IsMatch(site.Id, "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$", RegexOptions.CultureInvariant))
-            throw new ArgumentException("Site ID must contain 1–64 letters, numbers, underscores, or hyphens.");
-        if (!Regex.IsMatch(site.Hostname, "^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$", RegexOptions.CultureInvariant))
-            throw new ArgumentException("Enter a hostname such as app.test without a scheme or path.");
-        if (site.Port is < 1 or > 65535) throw new ArgumentException("Site port must be between 1 and 65535.");
-        if (!Path.IsPathFullyQualified(site.DocumentRoot) || !Directory.Exists(site.DocumentRoot))
-            throw new ArgumentException("Select an existing absolute document-root directory.");
-        if (site.DocumentRoot.IndexOfAny(['\r', '\n', '\0', '"', '$']) >= 0)
-            throw new ArgumentException("Document root contains characters that cannot be represented safely in Nginx configuration.");
-    }
-
     private void Log(string level, string message)
     {
         try
@@ -390,6 +354,7 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
+        if (_siteWatcher is not null) await _siteWatcher.DisposeAsync();
         await _operations.WaitAsync();
         try
         {

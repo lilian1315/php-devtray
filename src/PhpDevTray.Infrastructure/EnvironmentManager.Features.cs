@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using PhpDevTray.Core;
+using PhpDevTray.Infrastructure.Runtimes;
 using PhpDevTray.Infrastructure.Releases;
 
 namespace PhpDevTray.Infrastructure;
@@ -35,45 +36,19 @@ public sealed partial class EnvironmentManager
             Log("Information", $"Installed verified release {releaseId}");
             return;
         }
-        string? newlyCreatedDirectory = null;
-        var committed = false;
-        try
+        if (downloaded.Kind is ServiceKind.Caddy or ServiceKind.FrankenPhp)
         {
-            AppSettings proposed;
-            switch (downloaded.Kind)
-            {
-                case ServiceKind.Nginx:
-                    newlyCreatedDirectory = await _catalog.ImportNginxAsync(downloaded.ExecutablePath, cancellationToken);
-                    proposed = _settings with { NginxDirectory = newlyCreatedDirectory };
-                    break;
-                case ServiceKind.Mailpit:
-                    proposed = _settings with { MailpitExecutable = await _catalog.ImportMailpitAsync(downloaded.ExecutablePath, cancellationToken) };
-                    break;
-                default:
-                    throw new InvalidOperationException("Unsupported runtime kind.");
-            }
-            await CommitSettingsAsync(proposed, cancellationToken);
-            committed = true;
+            await ImportWebRuntimeAsync(downloaded.Kind, downloaded.ExecutablePath, cancellationToken, releaseId.Split(':')[1]);
             progress?.Report(new("Installed"));
-            Log("Information", $"Installed verified release {releaseId}");
+            return;
         }
-        finally
-        {
-            if (!committed && newlyCreatedDirectory is not null)
-            {
-                var managedRoot = Path.GetFullPath(Path.Combine(_dataDirectory, "runtimes")) + Path.DirectorySeparatorChar;
-                var candidate = Path.GetFullPath(newlyCreatedDirectory);
-                if (!candidate.StartsWith(managedRoot, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("Refusing to clean an installation outside managed runtime storage.");
-                if (Directory.Exists(candidate)) Directory.Delete(candidate, true);
-            }
-        }
+        var executable = await _catalog.ImportMailpitAsync(downloaded.ExecutablePath, cancellationToken);
+        await CommitSettingsAsync(_settings with { MailpitExecutable = executable }, cancellationToken);
+        progress?.Report(new("Installed"));
     }, cancellationToken);
 
     private void EnsureNewInstallation(ServiceKind kind, string? channel)
     {
-        if (kind == ServiceKind.Nginx && _settings.NginxDirectory is not null)
-            throw new InvalidOperationException("Nginx is already installed. A validated update/rollback workflow is not available yet.");
         if (kind == ServiceKind.Mailpit && _settings.MailpitExecutable is not null)
             throw new InvalidOperationException("Mailpit is already installed. A validated update/rollback workflow is not available yet.");
     }
@@ -84,6 +59,8 @@ public sealed partial class EnvironmentManager
         await _operations.WaitAsync(cancellationToken);
         try
         {
+            if (channel.StartsWith("franken-", StringComparison.Ordinal))
+                return await _catalog.GetPhpExtensionsAsync(RuntimeCatalog.FrankenInstallation(FindFranken(channel)), _settings, cancellationToken);
             var installation = _settings.PhpInstallations.SingleOrDefault(p => p.Channel == channel)
                 ?? throw new InvalidOperationException($"PHP {channel} is not installed.");
             return await _catalog.GetPhpExtensionsAsync(installation, _settings, cancellationToken);
@@ -94,6 +71,11 @@ public sealed partial class EnvironmentManager
     public Task SetPhpExtensionEnabledAsync(string channel, string extension, bool enabled,
         CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
     {
+        if (channel.StartsWith("franken-", StringComparison.Ordinal))
+        {
+            await SetFrankenExtensionAsync(channel, extension, enabled, cancellationToken);
+            return;
+        }
         var installation = _settings.PhpInstallations.SingleOrDefault(p => p.Channel == channel)
             ?? throw new InvalidOperationException($"PHP {channel} is not installed.");
         var proposedInstallation = await _catalog.PrepareExtensionChangeAsync(installation, _settings, extension, enabled, cancellationToken);
@@ -105,9 +87,7 @@ public sealed partial class EnvironmentManager
         };
         var id = $"php:{channel}";
         var phpWasRunning = _supervisor.IsRunning(id);
-        var nginxWasRunning = _supervisor.IsRunning("nginx") && _settings.Sites.Any(s => s.Enabled && s.PhpChannel == channel);
         _definitions.TryGetValue(id, out var previousPhpDefinition);
-        _definitions.TryGetValue("nginx", out var previousNginxDefinition);
         var transitionStarted = false;
         try
         {
@@ -115,12 +95,9 @@ public sealed partial class EnvironmentManager
             if (phpWasRunning)
             {
                 transitionStarted = true;
-                if (nginxWasRunning) await _supervisor.StopAsync("nginx", TimeSpan.FromSeconds(20), cancellationToken);
                 await _supervisor.StopAsync(id, TimeSpan.FromSeconds(5), cancellationToken);
                 await _supervisor.StartAsync(candidate, cancellationToken);
                 _definitions[id] = candidate;
-                if (nginxWasRunning && previousNginxDefinition is not null)
-                    await _supervisor.StartAsync(previousNginxDefinition, cancellationToken);
             }
             await CommitSettingsAsync(proposed, cancellationToken);
             Log("Information", $"{(enabled ? "Enabled" : "Disabled")} PHP {channel} extension {extension}");
@@ -131,7 +108,6 @@ public sealed partial class EnvironmentManager
             {
                 if (transitionStarted)
                 {
-                    if (nginxWasRunning) await _supervisor.StopAsync("nginx", TimeSpan.FromSeconds(5), CancellationToken.None);
                     await _supervisor.StopAsync(id, TimeSpan.FromSeconds(5), CancellationToken.None);
                 }
                 var recovered = await _catalog.BuildPhpAsync(installation, previous, CancellationToken.None);
@@ -139,8 +115,6 @@ public sealed partial class EnvironmentManager
                 {
                     await _supervisor.StartAsync(previousPhpDefinition ?? recovered, CancellationToken.None);
                     _definitions[id] = previousPhpDefinition ?? recovered;
-                    if (nginxWasRunning && previousNginxDefinition is not null)
-                        await _supervisor.StartAsync(previousNginxDefinition, CancellationToken.None);
                 }
                 _settings = previous;
             }

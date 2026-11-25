@@ -18,7 +18,7 @@ public sealed partial class EnvironmentManager
 
     private async Task ImportAndActivatePhpCoreAsync(string executable, CancellationToken cancellationToken, string? expectedVersion = null)
     {
-        var imported = await _catalog.ImportPhpAsync(executable, _settings, cancellationToken);
+        var imported = await _catalog.ImportPhpAsync(executable, _settings, cancellationToken, _caddy?.Runtimes.Select(r => r.Port).ToHashSet());
         var committed = false;
         var recoveryIncomplete = false;
         try
@@ -66,11 +66,8 @@ public sealed partial class EnvironmentManager
         var candidate = await _catalog.BuildPhpCandidateAsync(candidateInstallation, proposed, cancellationToken);
         var id = candidate.Id;
         var phpWasRunning = _supervisor.IsRunning(id);
-        var nginxWasRunning = phpWasRunning && _supervisor.IsRunning("nginx") &&
-            previous.Sites.Any(site => site.Enabled && site.PhpChannel == candidateInstallation.Channel);
         _definitions.TryGetValue(id, out var previousPhpDefinition);
-        _definitions.TryGetValue("nginx", out var previousNginxDefinition);
-        if (phpWasRunning && previousPhpDefinition is null || nginxWasRunning && previousNginxDefinition is null)
+        if (phpWasRunning && previousPhpDefinition is null)
             throw new InvalidOperationException("The running service has no recoverable managed definition. Stop it before activating another PHP patch.");
 
         var sourceDirectory = Path.Combine(_dataDirectory, "user", "php", candidateInstallation.Channel, "conf.d");
@@ -80,23 +77,16 @@ public sealed partial class EnvironmentManager
         foreach (var path in publishedFiles) previousBytes[path] = File.Exists(path) ? await File.ReadAllBytesAsync(path, cancellationToken) : null;
         var customPath = Path.Combine(sourceDirectory, "20-custom.ini");
         var validatedCustom = await File.ReadAllBytesAsync(Path.Combine(candidate.Command.EnvironmentVariables["PHP_INI_SCAN_DIR"], "20-custom.ini"), cancellationToken);
-        var nginxTransitionStarted = false;
         var phpTransitionStarted = false;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (phpWasRunning)
             {
-                if (nginxWasRunning)
-                {
-                    nginxTransitionStarted = true;
-                    await _supervisor.StopAsync("nginx", TimeSpan.FromSeconds(20), cancellationToken);
-                }
                 phpTransitionStarted = true;
                 await _supervisor.StopAsync(id, TimeSpan.FromSeconds(5), cancellationToken);
                 await _supervisor.StartAsync(candidate, cancellationToken);
                 _definitions[id] = candidate;
-                if (nginxWasRunning) await _supervisor.StartAsync(previousNginxDefinition!, cancellationToken);
             }
             cancellationToken.ThrowIfCancellationRequested();
             var currentCustom = await File.ReadAllBytesAsync(customPath, cancellationToken);
@@ -112,15 +102,12 @@ public sealed partial class EnvironmentManager
         {
             var recoveryErrors = new List<Exception>();
             async Task RecoverAsync(Func<Task> action) { try { await action(); } catch (Exception error) { recoveryErrors.Add(error); } }
-            if (nginxTransitionStarted) await RecoverAsync(() => _supervisor.StopAsync("nginx", TimeSpan.FromSeconds(5), CancellationToken.None));
             if (phpTransitionStarted) await RecoverAsync(() => _supervisor.StopAsync(id, TimeSpan.FromSeconds(5), CancellationToken.None));
             foreach (var saved in previousBytes) await RecoverAsync(() => RestorePublishedFileAsync(saved.Key, saved.Value));
             _settings = previous;
             if (previousPhpDefinition is null) _definitions.Remove(id); else _definitions[id] = previousPhpDefinition;
             if (phpTransitionStarted && phpWasRunning)
                 await RecoverAsync(() => _supervisor.StartAsync(previousPhpDefinition!, CancellationToken.None));
-            if (nginxTransitionStarted && nginxWasRunning)
-                await RecoverAsync(() => _supervisor.StartAsync(previousNginxDefinition!, CancellationToken.None));
             if (recoveryErrors.Count > 0)
                 throw new AggregateException("PHP activation failed and recovery was incomplete. Inspect service state and the application log.", [activationError, .. recoveryErrors]);
             throw;

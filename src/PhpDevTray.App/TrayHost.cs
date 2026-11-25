@@ -63,7 +63,7 @@ internal sealed class TrayHost : IDisposable
     private NotifyIconData IconData()
     {
         var text = _snapshot is null ? "PHP DevTray · starting" :
-            $"Nginx: {Describe(ServiceKind.Nginx)} · PHP: {DescribePhp()} · Mail Trap: {Describe(ServiceKind.Mailpit)}";
+            $"Caddy: {Describe(ServiceKind.Caddy)} · PHP: {DescribePhp()} · Mail Trap: {Describe(ServiceKind.Mailpit)}";
         if (text.Length > 127) text = text[..127];
         return new NotifyIconData
         {
@@ -78,7 +78,7 @@ internal sealed class TrayHost : IDisposable
         ? status == ServiceStatus.NotInstalled ? "not installed" : status == ServiceStatus.Failed ? "needs attention" : status.ToString().ToLowerInvariant() : "not installed";
     private string DescribePhp()
     {
-        var services = _snapshot?.Services.Where(s => s.Kind == ServiceKind.Php && s.Status != ServiceStatus.NotInstalled).ToArray() ?? [];
+        var services = _snapshot?.Services.Where(s => (s.Kind is ServiceKind.Php or ServiceKind.FrankenPhp) && s.Status != ServiceStatus.NotInstalled).ToArray() ?? [];
         if (services.Length == 0) return "not installed";
         if (services.Any(s => s.Status == ServiceStatus.Failed)) return "needs attention";
         if (services.Any(s => IsTransition(s.Status))) return "working";

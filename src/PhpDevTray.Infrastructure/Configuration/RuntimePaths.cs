@@ -6,12 +6,6 @@ namespace PhpDevTray.Infrastructure.Configuration;
 
 public static partial class RuntimePaths
 {
-    public static string NginxQuote(string value)
-    {
-        if (value.IndexOfAny(['\r', '\n', '\0', '$', '"']) >= 0)
-            throw new ArgumentException("Nginx paths cannot contain quotes, dollar signs, or control characters.");
-        return '"' + Path.GetFullPath(value).Replace('\\', '/') + '"';
-    }
 
     public static string IniQuote(string value)
     {

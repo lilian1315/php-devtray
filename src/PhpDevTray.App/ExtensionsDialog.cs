@@ -14,6 +14,7 @@ internal sealed class ExtensionsDialog : Window
 {
     private readonly IEnvironmentManager _manager;
     private readonly string _channel;
+    private readonly string _runtimeLabel;
     private readonly CancellationTokenSource _lifetime;
     private readonly CancellationToken _token;
     private readonly ListBox _list;
@@ -39,7 +40,9 @@ internal sealed class ExtensionsDialog : Window
         _channel = channel;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(ownerLifetime);
         _token = _lifetime.Token;
-        Title = $"PHP {channel} extensions";
+        var label = manager.Snapshot.Services.FirstOrDefault(s => s.Id == channel)?.DisplayName ?? $"PHP NTS {channel}";
+        _runtimeLabel = label;
+        Title = $"{label} extensions";
         Icon = AppLogo.WindowIcon;
         Width = 680;
         Height = 760;
@@ -58,13 +61,13 @@ internal sealed class ExtensionsDialog : Window
         header.ColumnDefinitions.Add(new ColumnDefinition());
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var title = new StackPanel();
-        title.Children.Add(Text($"PHP {channel}", 11, true, true, new Thickness(0, 0, 0, 4)));
+        title.Children.Add(Text(label, 11, true, true, new Thickness(0, 0, 0, 4)));
         title.Children.Add(Text("Extensions", 22, true));
         header.Children.Add(title);
         _refresh = ActionButton("Refresh", "SecondaryButtonStyle", AppIcon.Refresh);
         _refresh.VerticalAlignment = VerticalAlignment.Top;
         _refresh.Margin = new Thickness(0, 10, 0, 0);
-        AutomationProperties.SetName(_refresh, $"Refresh PHP {channel} extension inventory");
+        AutomationProperties.SetName(_refresh, $"Refresh {label} extension inventory");
         Grid.SetColumn(_refresh, 1);
         header.Children.Add(_refresh);
         layout.Children.Add(header);
@@ -155,7 +158,7 @@ internal sealed class ExtensionsDialog : Window
         ScrollViewer.SetHorizontalScrollBarVisibility(_list, ScrollBarVisibility.Disabled);
         ScrollViewer.SetVerticalScrollBarVisibility(_list, ScrollBarVisibility.Auto);
         VirtualizingPanel.SetIsVirtualizing(_list, true);
-        AutomationProperties.SetName(_list, $"PHP {channel} extension inventory");
+        AutomationProperties.SetName(_list, $"{label} extension inventory");
         Grid.SetRow(_list, 1);
         table.Children.Add(_list);
         var tableBorder = new Border { Child = table, CornerRadius = new CornerRadius(9), BorderThickness = new Thickness(1), ClipToBounds = true };
@@ -364,7 +367,7 @@ internal sealed class ExtensionsDialog : Window
             remove.FontSize = 11;
             remove.IsEnabled = !_busy;
             remove.ToolTip = "Remove the loading directive for this failed extension";
-            AutomationProperties.SetName(remove, $"Remove failed PHP {_channel} {extension.Name} loading directive");
+            AutomationProperties.SetName(remove, $"Remove failed {_runtimeLabel} {extension.Name} loading directive");
             remove.Click += async (_, _) => await ChangeAsync(extension, false);
             Cell(row, remove, 3, true);
         }
@@ -377,7 +380,7 @@ internal sealed class ExtensionsDialog : Window
                 HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
                 ToolTip = extension.IsEnabled ? "Disable extension" : extension.IsAvailable ? "Enable extension" : "The extension DLL is not available"
             };
-            AutomationProperties.SetName(toggle, $"{(extension.IsEnabled ? "Disable" : "Enable")} PHP {_channel} {extension.Name}");
+            AutomationProperties.SetName(toggle, $"{(extension.IsEnabled ? "Disable" : "Enable")} {_runtimeLabel} {extension.Name}");
             toggle.Click += async (_, _) => { toggle.IsChecked = extension.IsEnabled; await ChangeAsync(extension, !extension.IsEnabled); };
             Cell(row, toggle, 3, true);
         }
