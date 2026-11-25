@@ -74,12 +74,18 @@ internal sealed partial class ManagerWindow : Window
     private Button? _cancelDownload;
     private readonly Dictionary<ThemePreference, Button> _themeButtons = new();
     private CheckBox? _pathSetting;
+    private readonly IStartupRegistration _startupRegistration;
+    private CheckBox? _startupSetting;
+    private TextBlock? _startupNotice;
+    private StartupRegistrationState? _startupState;
+    private bool _startupChanging;
     private ComboBox? _defaultPhpPicker;
     private WindowState _restoreState = WindowState.Normal;
 
-    public ManagerWindow(IEnvironmentManager manager)
+    public ManagerWindow(IEnvironmentManager manager, IStartupRegistration? startupRegistration = null)
     {
         _manager = manager; _snapshot = manager.Snapshot;
+        _startupRegistration = startupRegistration ?? new StartupRegistration(_snapshot.DataDirectory);
         _section = Sections.Contains(_snapshot.LastSection) ? _snapshot.LastSection : Sections[0];
         Title = "PHP DevTray"; Width = 1000; Height = 740; MinWidth = 560; MinHeight = 500;
         Icon = AppLogo.WindowIcon;
@@ -182,6 +188,7 @@ internal sealed partial class ManagerWindow : Window
         StateChanged += (_, _) => { if (WindowState == WindowState.Minimized) Hide(); else _restoreState = WindowState; };
         _pageRefresher = new PageAutoRefresher(Dispatcher, RefreshVisiblePageAsync);
         IsVisibleChanged += (_, _) => UpdatePageRefresh();
+        Activated += async (_, _) => { if (_section == "Settings") await ReadStartupSettingAsync(); };
         Closing += OnClosing;
         PreviewKeyDown += (_, args) =>
         {
@@ -242,7 +249,7 @@ internal sealed partial class ManagerWindow : Window
         if (_renderedSection != _section || _bodySignature != signature)
         {
             _renderedSection = _section; _bodySignature = signature; _bodyButtons.Clear(); _contentHost.Children.Clear(); _pageActions.Children.Clear(); _phpRows.Clear(); _inlineServices.Clear();
-            _mailList = null; _mailSearch = null; _mailPreview = null; _mailResults = null; _mailNoResults = null; _mailDetail = null; _logOutput = null; _releaseContent = null; _releaseVersionPicker = null; _pathSetting = null; _defaultPhpPicker = null; _themeButtons.Clear();
+            _mailList = null; _mailSearch = null; _mailPreview = null; _mailResults = null; _mailNoResults = null; _mailDetail = null; _logOutput = null; _releaseContent = null; _releaseVersionPicker = null; _pathSetting = null; _startupSetting = null; _startupNotice = null; _defaultPhpPicker = null; _themeButtons.Clear();
             switch (_section)
             {
                 case "Sites": BuildSites(); break;
@@ -692,7 +699,7 @@ internal sealed partial class ManagerWindow : Window
 
     private void BuildSettings()
     {
-        Heading("Settings", "Appearance, command-line PHP and workspace files.");
+        Heading("Settings", "Appearance, startup, command-line PHP and workspace files.");
         var settings = new StackPanel();
         var appearance = new StackPanel(); appearance.Children.Add(T("Appearance", 14, true)); appearance.Children.Add(T("Choose a theme or follow Windows.", 11, muted: true, margin: new Thickness(0, 5, 0, 14)));
         var themes = new UniformGrid { Columns = 3 };
@@ -701,6 +708,26 @@ internal sealed partial class ManagerWindow : Window
             var button = ActionButton(label, () => RunAsync("Changing appearance…", () => _manager.SetThemeAsync(theme, _lifetime.Token)), "SecondaryButtonStyle", icon, $"Use {label.ToLowerInvariant()} theme"); button.Margin = new Thickness(0, 0, theme == ThemePreference.Dark ? 0 : 7, 0); themes.Children.Add(button); _themeButtons[theme] = button;
         }
         appearance.Children.Add(themes); var appearanceSurface = Surface(appearance, "CardBrush", 10, new Thickness(17)); appearanceSurface.Margin = new Thickness(0, 0, 0, 12); settings.Children.Add(appearanceSurface);
+        var startup = new StackPanel(); startup.Children.Add(T("Startup", 14, true));
+        startup.Children.Add(T("Start services in the system tray when you sign in to Windows. The window stays closed.", 11, muted: true, margin: new Thickness(0, 5, 0, 10)));
+        _startupSetting = new CheckBox { Content = "Start PHP DevTray with Windows", IsEnabled = false };
+        AutomationProperties.SetName(_startupSetting, "Start PHP DevTray with Windows");
+        _startupSetting.Click += async (_, _) =>
+        {
+            if (_updatingInputs || _startupChanging) return;
+            var enabled = _startupSetting.IsChecked == true;
+            _startupChanging = true;
+            try { await RunAsync("Updating Windows startup…", async () => _startupState = await _startupRegistration.SetEnabledAsync(enabled)); }
+            finally { _startupChanging = false; UpdateSettings(); }
+        };
+        startup.Children.Add(_startupSetting);
+        _startupNotice = T("", 11, muted: true, margin: new Thickness(0, 5, 0, 0)); startup.Children.Add(_startupNotice);
+        var windowsStartup = ActionButton("Windows startup settings", () => OpenPathAsync("ms-settings:startupapps"), "SecondaryButtonStyle", AppIcon.ExternalLink, independent: true);
+        windowsStartup.HorizontalAlignment = HorizontalAlignment.Left;
+        windowsStartup.Margin = new Thickness(0, 8, 0, 0);
+        startup.Children.Add(windowsStartup);
+        var startupSurface = Surface(startup, "CardBrush", 10, new Thickness(17)); startupSurface.Margin = new Thickness(0, 0, 0, 12); settings.Children.Add(startupSurface);
+        _ = ReadStartupSettingAsync();
         var cli = new StackPanel(); cli.Children.Add(T("Command-line PHP", 14, true)); cli.Children.Add(T("Use your selected PHP version in new terminal sessions.", 11, muted: true, margin: new Thickness(0, 5, 0, 13)));
         if (_snapshot.PhpInstallations.Count > 0)
         {
@@ -736,8 +763,29 @@ internal sealed partial class ManagerWindow : Window
             button.SetResourceReference(Control.BorderBrushProperty, theme == _snapshot.Theme ? "AccentBrush" : "BorderBrush");
         }
         if (_pathSetting is not null) { _pathSetting.IsChecked = _snapshot.PathIntegrationEnabled; _pathSetting.IsEnabled = !Busy && _snapshot.PhpInstallations.Count > 0; }
+        if (_startupSetting is not null)
+        {
+            _startupSetting.IsChecked = _startupState?.Enabled == true;
+            _startupSetting.IsEnabled = !Busy && !_startupChanging && _startupState is not null;
+        }
+        if (_startupNotice is not null)
+        {
+            _startupNotice.Text = _startupState?.Notice ?? string.Empty;
+            _startupNotice.Visibility = string.IsNullOrEmpty(_startupNotice.Text) ? Visibility.Collapsed : Visibility.Visible;
+        }
         if (_defaultPhpPicker is not null) { _defaultPhpPicker.SelectedItem = _snapshot.DefaultPhpChannel; _defaultPhpPicker.IsEnabled = !Busy; }
         _updatingInputs = false;
+    }
+
+    private async Task ReadStartupSettingAsync()
+    {
+        try
+        {
+            var state = await _startupRegistration.ReadAsync();
+            if (!_startupChanging) _startupState = state;
+        }
+        catch (Exception exception) { _startupState = null; _error = "Could not read Windows startup settings. " + exception.Message; }
+        if (!_shutdown) Render(_manager.Snapshot);
     }
 
     internal async Task PrepareSmokeSectionAsync(string section, bool checkReleases = false)

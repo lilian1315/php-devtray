@@ -47,7 +47,7 @@ internal sealed class TrayHost : IDisposable
         var statuses = snapshot.Services.Select(s => s.Status).ToArray();
         var busy = snapshot.IsBusy || statuses.Any(IsTransition);
         _state = busy ? TrayState.Busy
-            : statuses.Any(s => s == ServiceStatus.Failed)
+            : snapshot.LastError is not null || statuses.Any(s => s == ServiceStatus.Failed)
                 ? statuses.Any(s => s == ServiceStatus.Running) ? TrayState.Partial : TrayState.Failed
             : statuses.Any(s => s == ServiceStatus.Running)
                 ? statuses.Where(s => s != ServiceStatus.NotInstalled).All(s => s == ServiceStatus.Running) ? TrayState.Healthy : TrayState.Partial

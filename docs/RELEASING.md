@@ -67,6 +67,7 @@ Command-line PHP uses a package execution alias, **php.exe**, managed in Windows
 Before a public submission, run Windows App Certification Kit on the package and test an installed package, ideally through a private Store flight:
 
 - Start menu launch, tray restore, minimize/close preserving services, and explicit Exit stopping them.
+- Enable/disable **Settings > Startup > Start PHP DevTray with Windows**, sign out/in, and verify that configured services start with only the tray icon. Confirm Windows Startup settings can disable it, that the app reports this state, and that a manual launch opens the manager. Repeat after a package update.
 - Runtime downloads/imports, Visual C++ prerequisites, PHP extensions, FrankenPHP site access outside package storage, Mailpit capture, and PHP patch activation/recovery.
 - `php -v`, arguments, working directory, stdin/stdout/stderr, exit codes and CLI lifetime after tray Exit; enable/disable the alias and test conflicts with another PHP installation.
 - Update an installed package to a higher `StorePackageVersion`, confirm workspace retention, and verify uninstall/reset behavior using a disposable profile. Exit the tray app and stop independent CLI sessions before testing an update.

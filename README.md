@@ -32,6 +32,8 @@ Store builds provide Start menu access and a Windows-managed `php.exe` command a
 
 Open `artifacts/releases/0.7.0/PhpDevTray.exe`. The normal resizable window opens on launch. Minimize or Close hides it to the tray while services continue. Left-click its notification icon to restore it, including its maximized state. Right-click for **Open manager**, **Start all / Stop all**, and **Exit and stop services**.
 
+Enable **Settings > Startup > Start PHP DevTray with Windows** to start the configured services when you sign in, with no manager window. The tray icon remains available. This option is off by default. Startup failures are recorded in the application logs and can be inspected by opening the manager. A manual launch still opens the window.
+
 The published folder is self-contained for Windows x64. Keep the full folder, including `cli/`, together. No .NET installation is required to run this published build. PHP retains its own Visual C++ prerequisite.
 
 To launch the application from a terminal, run:
@@ -82,7 +84,7 @@ To update a PHP channel, open its runtime actions and choose **Check for updates
 - PHP activation recovers from handled errors/cancellation, including failed readiness or settings publication. Durable crash-recovery journaling across sudden process/OS termination is not implemented.
 - Third-party extension installation and advanced per-site extension profiles are not implemented. Bundled extensions are supported.
 - Mail supports actual plain-text message inspection and local subject/sender filtering of the loaded inbox. HTML preview, attachment handling, server-side search, deletion, and retention UI are pending. No browser renderer is loaded.
-- Store submission and installed-package acceptance testing remain pending. Startup-with-Windows UI, data-directory migration, settings editor for ports, and automatic restart policy are not implemented.
+- Store submission and installed-package acceptance testing remain pending. Data-directory migration, settings editor for ports, and automatic restart policy are not implemented.
 - The ordinary offline checks use real Windows process/protocol fixtures and simulated binaries for configuration cases. The separate upstream test downloads verified actual distributions into an isolated profile and never changes user PATH or hosts.
 - Native-menu interaction, full keyboard/screen-reader flows, Explorer restart, and mixed-DPI/multi-monitor behavior require interactive acceptance testing. Memory and the 200 ms popup target have not been benchmarked.
 - Logging currently uses a bounded native process-output stream and structured JSON application files through BCL code. Microsoft.Extensions logging/DI integration and retention are later foundation refinements.

@@ -106,6 +106,7 @@ internal static class Program
             Require(menu.Template.FindName("PART_Popup", menu) is Popup, "Menu template must retain native submenu popup semantics.");
 
             AutoRefreshChecks.Run();
+            StartupChecks.Run();
             themeType.GetMethod("ApplyHighContrast", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [app.Resources]);
             Require(ReferenceEquals(app.Resources["TextBrush"], SystemColors.WindowTextBrush), "High contrast must use native system text colors.");
             Require(ReferenceEquals(app.Resources["SelectedTextBrush"], SystemColors.HighlightTextBrush), "High contrast selections must use native highlight text colors.");

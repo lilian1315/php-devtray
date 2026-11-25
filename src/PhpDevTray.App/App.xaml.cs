@@ -23,6 +23,7 @@ public partial class App : Application
     private int _exitCode;
     private ThemePreference? _smokeTheme;
     private bool _interactivePreview;
+    private bool _startupLaunch;
 
     internal bool IsResourceCheckHost { get; init; }
 
@@ -33,6 +34,7 @@ public partial class App : Application
         _smokeTest = e.Args.Contains("--smoke-test", StringComparer.OrdinalIgnoreCase);
         var previewProfile = Properties["DevelopmentPreviewProfile"] as string;
         _interactivePreview = previewProfile is not null || e.Args.Contains("--preview", StringComparer.OrdinalIgnoreCase);
+        _startupLaunch = !_smokeTest && !_interactivePreview && e.Args.Contains("--startup", StringComparer.OrdinalIgnoreCase);
         _screenshotPath = Argument(e.Args, "--screenshot");
         var dataDirectory = _smokeTest ? Argument(e.Args, "--smoke-test")
             : _interactivePreview ? Argument(e.Args, "--preview") ?? previewProfile : Argument(e.Args, "--data-directory");
@@ -58,7 +60,7 @@ public partial class App : Application
         _instance = new Mutex(true, instanceName, out var created);
         if (!created)
         {
-            try { using var other = EventWaitHandle.OpenExisting(activationName); other.Set(); }
+            try { if (!_startupLaunch) { using var other = EventWaitHandle.OpenExisting(activationName); other.Set(); } }
             catch (WaitHandleCannotBeOpenedException) { }
             Shutdown();
             return;
@@ -147,11 +149,20 @@ public partial class App : Application
                 if (capture != _popup) capture.Close();
                 await ExitAsync();
             }
+            else if (_startupLaunch) await _manager.StartAllAsync();
             else OpenManager();
         }
         catch (Exception exception)
         {
             _exitCode = 1;
+            if (_startupLaunch)
+            {
+                RecordStartupFailure(exception);
+                // Keep the tray available so startup failures can be inspected and retried.
+                if (_tray is not null && _manager is not null) { RefreshUi(); return; }
+                await ExitAsync();
+                return;
+            }
             if (_smokeTest)
             {
                 RecordSmokeFailure(exception);
@@ -224,6 +235,7 @@ public partial class App : Application
             return;
         }
         if (_popup is not null) _popup.ShowError(e.Exception.Message);
+        else if (_startupLaunch) RecordStartupFailure(e.Exception);
         else MessageBox.Show(e.Exception.Message, "PHP DevTray", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
@@ -271,6 +283,19 @@ public partial class App : Application
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_screenshotPath))!);
             File.WriteAllText(_screenshotPath + ".error.txt", exception.ToString());
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private void RecordStartupFailure(Exception exception)
+    {
+        System.Diagnostics.Debug.WriteLine(exception);
+        try
+        {
+            var directory = Path.Combine(_manager?.Snapshot.DataDirectory ?? AppDeployment.DefaultDataDirectory, "logs", "application");
+            Directory.CreateDirectory(directory);
+            File.AppendAllText(Path.Combine(directory, "startup.log"), $"{DateTimeOffset.Now:O} {exception}{Environment.NewLine}");
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
