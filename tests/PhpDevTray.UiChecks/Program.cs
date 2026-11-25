@@ -14,12 +14,14 @@ using PhpDevTray.Core;
 internal static class Program
 {
     [STAThread]
-    public static int Main()
+    public static int Main(string[] args)
     {
         try
         {
             var app = new App { IsResourceCheckHost = true };
             app.InitializeComponent();
+            if (args.Contains("--desktop-preview")) return DesktopPreview.Run(app);
+            if (args.Length == 2 && args[0] == "--desktop-capture") return DesktopPreview.Run(app, args[1]);
             var themeType = typeof(App).Assembly.GetType("PhpDevTray.App.ThemeManager", true)!;
             using var theme = (IDisposable)Activator.CreateInstance(themeType, nonPublic: true)!;
             var preference = themeType.GetMethod("SetPreference")!;
@@ -107,6 +109,10 @@ internal static class Program
 
             AutoRefreshChecks.Run();
             StartupChecks.Run();
+            Require(AutomationProperties.GetName(DialogUi.ActionButton("Browse folders…", "SecondaryButtonStyle", AppIcon.Folder)) == "Browse folders…", "Dialog buttons with composed icon content need an explicit accessible name.");
+            Require(ManagerWindow.ReadableLogLine("{\"level\":\"Error\",\"message\":\"Choose an available port.\"}").Contains("Error" + Environment.NewLine + "Choose an available port."), "Activity must display readable severity and message text.");
+            foreach (var raw in new[] { "native process output", "{partial", "[]", "{\"message\":42}" })
+                Require(ManagerWindow.ReadableLogLine(raw) == raw, "Activity must preserve non-application or partial log lines.");
             themeType.GetMethod("ApplyHighContrast", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [app.Resources]);
             Require(ReferenceEquals(app.Resources["TextBrush"], SystemColors.WindowTextBrush), "High contrast must use native system text colors.");
             Require(ReferenceEquals(app.Resources["SelectedTextBrush"], SystemColors.HighlightTextBrush), "High contrast selections must use native highlight text colors.");

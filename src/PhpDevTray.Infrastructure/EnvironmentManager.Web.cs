@@ -20,58 +20,95 @@ public sealed partial class EnvironmentManager
         if (existing is not null && !string.Equals(existing.DocumentRoot, site.DocumentRoot, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The document root is fixed when the site is created.");
         if (existing is null && !Directory.Exists(site.DocumentRoot)) throw new DirectoryNotFoundException(site.DocumentRoot);
-        var proposed = stack with { Sites = [.. stack.Sites.Where(s => !s.Hostname.Equals(host, StringComparison.OrdinalIgnoreCase)), site] };
+        var fileKey = existing is null && stack.Sites.Any(other => (other.CaddyfileKey ?? other.Hostname).Equals(host, StringComparison.OrdinalIgnoreCase))
+            ? Guid.NewGuid().ToString("N") : existing?.CaddyfileKey;
+        site = site with { CaddyfileKey = fileKey };
+        var proposed = stack with { Sites = existing is null ? [.. stack.Sites, site]
+            : stack.Sites.Select(item => item == existing ? site : item).ToArray() };
         proposed.Validate();
         await CaddyStack.EnsureSiteFileAsync(_dataDirectory, site, cancellationToken);
-        var previous = stack.Sites.FirstOrDefault(s => s.Hostname.Equals(host, StringComparison.OrdinalIgnoreCase));
-        var oldId = previous?.RuntimeId ?? site.RuntimeId;
-        bool switching = previous is { Enabled: true } && site.Enabled && oldId != site.RuntimeId;
-        bool editingStandalone = !_supervisor.IsRunning("caddy") && (IsRunningFranken(oldId) || IsRunningFranken(site.RuntimeId));
-        if (switching || editingStandalone)
-            await SwitchRunningSiteAsync(stack, proposed, oldId, site.RuntimeId, cancellationToken);
+        var oldId = existing?.RuntimeId ?? site.RuntimeId;
+        var activationChanged = (existing?.Enabled ?? false) != site.Enabled;
+        if (activationChanged || site.Enabled && oldId != site.RuntimeId)
+            await ApplySiteRoutingAsync(proposed, oldId, site, cancellationToken);
         else
             await SaveWebStackAsync(proposed, cancellationToken);
 
-        await RefreshSiteRootsAsync(cancellationToken);
-
-        bool IsRunningFranken(string id) => id.StartsWith("franken-", StringComparison.Ordinal) && _supervisor.IsRunning(id);
+        if (existing is null || oldId != site.RuntimeId)
+            await RefreshSiteRootsAsync(CancellationToken.None);
     }, cancellationToken);
 
-    private async Task SwitchRunningSiteAsync(CaddyStack previous, CaddyStack proposed, string oldId, string newId, CancellationToken token)
+    public Task RenameSiteAsync(string currentHostname, string newHostname, CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
+    {
+        var stack = _caddy ?? throw new InvalidOperationException("Initialize the environment first.");
+        var oldHost = RuntimePaths.SafeHostname(currentHostname.Trim());
+        var host = RuntimePaths.SafeHostname(newHostname.Trim());
+        var site = stack.Sites.SingleOrDefault(item => item.Hostname.Equals(oldHost, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"The site {oldHost} no longer exists. Refresh Sites and try again.");
+        if (host == oldHost) return;
+        if (stack.Sites.Any(item => item.Hostname.Equals(host, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"A site already uses {host}. Choose a different hostname.");
+        if (!File.Exists(CaddyStack.SiteFile(_dataDirectory, site)))
+            throw new FileNotFoundException($"Restore {site.CaddyfileName} before renaming {oldHost}.");
+
+        var renamed = site with { Hostname = host, CaddyfileKey = site.CaddyfileKey ?? oldHost };
+        var proposed = stack with { Sites = stack.Sites.Select(item => item == site ? renamed : item).ToArray() };
+        proposed.Validate();
+        if (site.Enabled)
+            await ApplySiteRoutingAsync(proposed, site.RuntimeId, renamed, cancellationToken);
+        else
+            await SaveWebStackAsync(proposed, cancellationToken);
+
+        var roots = new Dictionary<string, string?>(_siteRoots, StringComparer.OrdinalIgnoreCase);
+        if (roots.Remove(oldHost, out var root)) roots[host] = root;
+        _siteRoots = roots;
+        Log("Information", $"Renamed site {oldHost} to {host}");
+    }, cancellationToken);
+
+    private async Task StartWebDefinitionAsync(ManagedServiceDefinition service, CancellationToken token)
+    {
+        await _supervisor.StartAsync(service, token);
+        _definitions[service.Id] = service;
+    }
+
+    private async Task ApplySiteRoutingAsync(CaddyStack proposed, string oldId, WebSite site, CancellationToken token)
     {
         var proxyRunning = _supervisor.IsRunning("caddy");
-        var affected = new[] { oldId, newId }.Where(id => id.StartsWith("franken-", StringComparison.Ordinal)).ToArray();
-        var running = affected.Where(_supervisor.IsRunning).ToHashSet();
-        if (!proxyRunning && running.Count == 0)
+        var affected = new[] { oldId, site.RuntimeId }.Distinct().Where(id => id.StartsWith("franken-", StringComparison.Ordinal)).ToArray();
+        var running = affected.Where(_supervisor.IsRunning).ToArray();
+        if (!proxyRunning && running.Length == 0)
         {
             await SaveWebStackAsync(proposed, token);
             return;
         }
-        var started = new Stack<string>();
-        async Task<List<ManagedServiceDefinition>> Prepare(CaddyStack stack, CancellationToken ct)
-        {
-            if (proxyRunning)
-                return (await stack.PrepareAsync(_dataDirectory, _supervisor, _settings, ct))
-                    .Where(def => def.Id == "caddy" || affected.Contains(def.Id)).ToList();
-            var definitions = new List<ManagedServiceDefinition>();
-            foreach (var id in running)
-                definitions.AddRange(await stack.PrepareAsync(_dataDirectory, _supervisor, _settings, ct, id));
-            return definitions;
-        }
+        var previousIds = proxyRunning ? running.Append("caddy") : running;
+        var previousDefinitions = previousIds.Select(id => _definitions.GetValueOrDefault(id)
+            ?? throw new InvalidOperationException($"No recoverable configuration for {id}. Restart the service and try again.")).ToArray();
+        var generation = $"site-{Guid.NewGuid():N}";
+        var prepared = proxyRunning
+            ? (await proposed.PrepareAsync(_dataDirectory, _supervisor, _settings, token,
+                configurationGeneration: generation, allowIdleProxy: true))
+            : [];
+        var candidate = prepared.Where(def => running.Contains(def.Id) || site.Enabled && def.Id == site.RuntimeId).ToList();
+        // A running backend still needs an empty route table if its last site was disabled or moved.
+        foreach (var id in running.Where(id => candidate.All(def => def.Id != id)))
+            candidate.AddRange(await proposed.PrepareAsync(_dataDirectory, _supervisor, _settings, token, id, generation));
+        if (proxyRunning)
+            candidate.Add(prepared.Single(def => def.Id == "caddy"));
 
-        var candidate = await Prepare(proposed, token);
+        var started = new Stack<string>();
         try
         {
             if (proxyRunning) await _supervisor.StopAsync("caddy", TimeSpan.FromSeconds(20), token);
             foreach (var id in running) await _supervisor.StopAsync(id, TimeSpan.FromSeconds(5), token);
-            if (proxyRunning && newId.StartsWith("php:", StringComparison.Ordinal) && !_supervisor.IsRunning(newId))
+            if (proxyRunning && site.Enabled && site.RuntimeId.StartsWith("php:", StringComparison.Ordinal) && !_supervisor.IsRunning(site.RuntimeId))
             {
-                await StartCoreAsync(newId, token);
-                started.Push(newId);
+                await StartCoreAsync(site.RuntimeId, token);
+                started.Push(site.RuntimeId);
             }
             foreach (var service in candidate)
             {
-                await _supervisor.StartAsync(service, token);
+                await StartWebDefinitionAsync(service, token);
                 started.Push(service.Id);
             }
             await SaveWebStackAsync(proposed, token);
@@ -81,13 +118,10 @@ public sealed partial class EnvironmentManager
             try
             {
                 foreach (var id in started) await _supervisor.StopAsync(id, TimeSpan.FromSeconds(5), CancellationToken.None);
-                var restored = await Prepare(previous, CancellationToken.None);
-                foreach (var id in running.Where(id => restored.All(service => service.Id != id)))
-                    await StartCoreAsync(id, CancellationToken.None);
-                foreach (var service in restored)
-                    if (service.Id == "caddy" || running.Contains(service.Id)) await _supervisor.StartAsync(service, CancellationToken.None);
+                foreach (var service in previousDefinitions)
+                    if (!_supervisor.IsRunning(service.Id)) await StartWebDefinitionAsync(service, CancellationToken.None);
             }
-            catch (Exception recovery) { throw new AggregateException("Runtime switch and recovery failed.", failure, recovery); }
+            catch (Exception recovery) { throw new AggregateException("The site change failed and recovery was incomplete. Check Activity for details.", failure, recovery); }
             throw;
         }
     }

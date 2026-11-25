@@ -101,6 +101,7 @@ internal sealed class ThemeManager : IDisposable
             ["TextBrush"] = dark ? "#F1F3F7" : "#202735",
             ["MutedBrush"] = dark ? "#ABB3C1" : "#5D6676",
             ["BorderBrush"] = dark ? "#363D49" : "#D9DFE8",
+            ["InputBorderBrush"] = "#76849A",
             ["DividerBrush"] = dark ? "#2D333D" : "#E6EAF0",
             ["HoverBrush"] = dark ? "#2B313C" : "#E9EEF5",
             ["PressedBrush"] = dark ? "#343D4B" : "#DCE5F1",
@@ -140,7 +141,7 @@ internal sealed class ThemeManager : IDisposable
     private static void ApplyHighContrast(ResourceDictionary resources)
     {
         foreach (var name in new[] { "SurfaceBrush", "CardBrush", "SidebarBrush", "DisabledSurfaceBrush", "HoverBrush", "PressedBrush", "AccentSoftBrush" }) resources[name] = SystemColors.WindowBrush;
-        foreach (var name in new[] { "TextBrush", "MutedBrush", "BorderBrush", "DividerBrush", "ErrorBrush", "SuccessBrush", "WarningBrush" }) resources[name] = SystemColors.WindowTextBrush;
+        foreach (var name in new[] { "TextBrush", "MutedBrush", "BorderBrush", "InputBorderBrush", "DividerBrush", "ErrorBrush", "SuccessBrush", "WarningBrush" }) resources[name] = SystemColors.WindowTextBrush;
         foreach (var name in new[] { "AccentBrush", "AccentHoverBrush", "AccentPressedBrush", "SelectionBrush", "FocusBrush", "HoverBorderBrush" }) resources[name] = SystemColors.HighlightBrush;
         resources["AccentTextBrush"] = SystemColors.HighlightTextBrush;
         resources["SelectedTextBrush"] = SystemColors.HighlightTextBrush;

@@ -30,9 +30,13 @@ internal sealed class ExtensionsDialog : Window
     private readonly TextBox _detailText;
     private readonly Border _details;
     private readonly Button _refresh;
+    private readonly Button _apply;
+    private readonly Button _discard;
+    private readonly TextBlock _pendingSummary;
+    private readonly Dictionary<string, bool> _pending = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<PhpExtensionInfo> _extensions = [];
     private string? _selectedName;
-    private bool _busy, _closed, _loaded, _rendering;
+    private bool _busy, _applying, _closed, _loaded, _rendering;
 
     public ExtensionsDialog(IEnvironmentManager manager, string channel, CancellationToken ownerLifetime)
     {
@@ -53,6 +57,7 @@ internal sealed class ExtensionsDialog : Window
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         SetResourceReference(BackgroundProperty, "SurfaceBrush");
         var layout = new Grid();
+        layout.SetResourceReference(Panel.BackgroundProperty, "SurfaceBrush");
         foreach (var height in new[] { GridLength.Auto, GridLength.Auto, GridLength.Auto, new GridLength(1, GridUnitType.Star), GridLength.Auto })
             layout.RowDefinitions.Add(new RowDefinition { Height = height });
         Content = layout;
@@ -188,16 +193,28 @@ internal sealed class ExtensionsDialog : Window
         var footer = new Grid { Margin = new Thickness(20, 10, 20, 10) };
         footer.ColumnDefinitions.Add(new ColumnDefinition());
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var note = Text("Changes apply immediately. Running PHP restarts.", 11, muted: true);
-        note.VerticalAlignment = VerticalAlignment.Center;
-        note.Margin = new Thickness(0, 0, 18, 0);
-        footer.Children.Add(note);
-        var close = ActionButton("Close", "SecondaryButtonStyle");
+        var summaryPanel = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
+        _pendingSummary = Text("", 12, bold: true);
+        AutomationProperties.SetLiveSetting(_pendingSummary, AutomationLiveSetting.Polite);
+        summaryPanel.Children.Add(_pendingSummary);
+        summaryPanel.Children.Add(Text("If PHP is running, it restarts once when you apply.", 11, muted: true));
+        footer.Children.Add(summaryPanel);
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        var close = ActionButton("Close", "QuietButtonStyle");
         close.IsCancel = true;
-        close.MinWidth = 86;
         close.Click += (_, _) => Close();
-        Grid.SetColumn(close, 1);
-        footer.Children.Add(close);
+        actions.Children.Add(close);
+        _discard = ActionButton("Discard", "SecondaryButtonStyle");
+        _discard.Margin = new Thickness(6, 0, 0, 0);
+        _discard.Click += (_, _) => { _pending.Clear(); RenderInventory(); };
+        actions.Children.Add(_discard);
+        _apply = ActionButton("Apply changes", "PrimaryButtonStyle");
+        _apply.Margin = new Thickness(6, 0, 0, 0);
+        _apply.Click += async (_, _) => await ApplyAsync();
+        actions.Children.Add(_apply);
+        Grid.SetColumn(actions, 1);
+        footer.Children.Add(actions);
+        UpdatePendingSummary();
         var footerBorder = new Border { Child = footer, BorderThickness = new Thickness(0, 1, 0, 0) };
         footerBorder.SetResourceReference(Border.BorderBrushProperty, "DividerBrush");
         footerBorder.SetResourceReference(Border.BackgroundProperty, "CardBrush");
@@ -246,16 +263,48 @@ internal sealed class ExtensionsDialog : Window
         });
     }
 
-    private async Task ChangeAsync(PhpExtensionInfo extension, bool enabled)
+    private void StageChange(PhpExtensionInfo extension, bool? enabled, TextBlock stateText)
     {
         if (_busy || _closed || !CanToggle(extension)) return;
         _selectedName = extension.Name;
-        await RunAsync($"{(enabled ? "Enabling" : "Disabling")} {extension.Name}…", async () =>
+        if (enabled is { } desired) _pending[extension.Name] = desired;
+        else _pending.Remove(extension.Name);
+        UpdateRowState(extension, stateText);
+        UpdatePendingSummary();
+    }
+
+    private async Task ApplyAsync()
+    {
+        if (_busy || _closed || _pending.Count == 0) return;
+        var changes = _pending.Select(change => new PhpExtensionChange(change.Key, change.Value)).ToArray();
+        _applying = true;
+        try
         {
-            await _manager.SetPhpExtensionEnabledAsync(_channel, extension.Name, enabled, _token);
-            var inventory = await _manager.GetPhpExtensionsAsync(_channel, _token);
-            if (!_closed) _extensions = inventory;
-        });
+            await RunAsync("Applying extension changes…", async () =>
+            {
+                await _manager.ApplyPhpExtensionChangesAsync(_channel, changes, _token);
+                if (_closed) return;
+                _extensions = _extensions.Select(extension => _pending.TryGetValue(extension.Name, out var enabled)
+                    ? extension with { IsEnabled = enabled, IsManaged = enabled, Error = null }
+                    : extension).ToArray();
+                _pending.Clear();
+                try { _extensions = await _manager.GetPhpExtensionsAsync(_channel, _token); }
+                catch (Exception error) when (!_token.IsCancellationRequested)
+                { throw new InvalidOperationException("Changes applied. Refresh the inventory to update module details. " + error.Message, error); }
+            });
+        }
+        finally { _applying = false; }
+    }
+
+    private void UpdatePendingSummary()
+    {
+        _apply.IsEnabled = _discard.IsEnabled = !_busy && _pending.Count != 0;
+        _pendingSummary.Text = _pending.Count switch
+        {
+            0 => "No pending changes",
+            1 => "1 pending change",
+            _ => $"{_pending.Count} pending changes"
+        };
     }
 
     private async Task RunAsync(string message, Func<Task> action)
@@ -280,6 +329,7 @@ internal sealed class ExtensionsDialog : Window
     {
         if (_closed) return;
         _refresh.IsEnabled = !_busy;
+        UpdatePendingSummary();
         _placeholder.Visibility = string.IsNullOrEmpty(_search.Text) ? Visibility.Visible : Visibility.Collapsed;
         var search = _search.Text.Trim();
         var visible = _extensions.Where(extension => extension.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
@@ -348,9 +398,8 @@ internal sealed class ExtensionsDialog : Window
         Cell(row, nameGroup, 0);
         var external = !extension.IsBuiltIn && extension.IsEnabled && !extension.IsManaged;
         Cell(row, Text(extension.IsBuiltIn ? "Built-in" : external ? "External" : "Bundled", 11, muted: true), 1);
-        var state = extension.IsEnabled ? "Loaded" : extension.IsBuiltIn ? "Not verified" : extension.IsAvailable ? "Disabled" : "Missing DLL";
-        var stateText = Text(state, 11);
-        stateText.SetResourceReference(TextBlock.ForegroundProperty, extension.IsEnabled ? "SuccessBrush" : !extension.IsAvailable ? "WarningBrush" : "MutedBrush");
+        var stateText = Text("", 11);
+        UpdateRowState(extension, stateText);
         Cell(row, stateText, 2);
         if (extension.IsBuiltIn || external)
         {
@@ -361,32 +410,55 @@ internal sealed class ExtensionsDialog : Window
         }
         else if (extension.IsManaged && !extension.IsEnabled)
         {
-            var remove = ActionButton("Remove", "QuietButtonStyle");
+            var remove = ActionButton(_pending.ContainsKey(extension.Name) ? "Undo" : "Remove", "QuietButtonStyle");
             remove.Padding = new Thickness(5, 4, 5, 4);
             remove.MinWidth = 0;
             remove.FontSize = 11;
             remove.IsEnabled = !_busy;
             remove.ToolTip = "Remove the loading directive for this failed extension";
-            AutomationProperties.SetName(remove, $"Remove failed {_runtimeLabel} {extension.Name} loading directive");
-            remove.Click += async (_, _) => await ChangeAsync(extension, false);
+            void UpdateRemoveLabel() => AutomationProperties.SetName(remove, _pending.ContainsKey(extension.Name)
+                ? $"Undo removal of {_runtimeLabel} {extension.Name}"
+                : $"Remove failed {_runtimeLabel} {extension.Name} loading directive");
+            UpdateRemoveLabel();
+            remove.Click += (_, _) =>
+            {
+                StageChange(extension, _pending.ContainsKey(extension.Name) ? null : false, stateText);
+                remove.Content = _pending.ContainsKey(extension.Name) ? "Undo" : "Remove";
+                UpdateRemoveLabel();
+            };
             Cell(row, remove, 3, true);
         }
         else
         {
             var toggle = new CheckBox
             {
-                IsChecked = extension.IsEnabled, IsEnabled = !_busy && CanToggle(extension),
+                IsChecked = _pending.GetValueOrDefault(extension.Name, extension.IsEnabled), IsEnabled = !_busy && CanToggle(extension),
                 MinWidth = 40, MinHeight = 40, HorizontalContentAlignment = HorizontalAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
                 ToolTip = extension.IsEnabled ? "Disable extension" : extension.IsAvailable ? "Enable extension" : "The extension DLL is not available"
             };
-            AutomationProperties.SetName(toggle, $"{(extension.IsEnabled ? "Disable" : "Enable")} {_runtimeLabel} {extension.Name}");
-            toggle.Click += async (_, _) => { toggle.IsChecked = extension.IsEnabled; await ChangeAsync(extension, !extension.IsEnabled); };
+            AutomationProperties.SetName(toggle, $"Enable {_runtimeLabel} {extension.Name}");
+            void StageSelection(object sender, RoutedEventArgs args)
+            {
+                var enabled = toggle.IsChecked == true;
+                StageChange(extension, enabled == extension.IsEnabled ? null : enabled, stateText);
+            }
+            toggle.Checked += StageSelection;
+            toggle.Unchecked += StageSelection;
             Cell(row, toggle, 3, true);
         }
         var item = new ListBoxItem { Content = row, Tag = extension, Padding = new Thickness(10, 0, 10, 0), HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0) };
-        AutomationProperties.SetName(item, $"{extension.Name}, {state}, {(extension.IsBuiltIn ? "built-in" : external ? "configured externally" : "bundled extension")}");
+        AutomationProperties.SetName(item, $"{extension.Name}, {(extension.IsBuiltIn ? "built-in" : external ? "configured externally" : "bundled extension")}");
         return item;
+    }
+
+    private void UpdateRowState(PhpExtensionInfo extension, TextBlock state)
+    {
+        var staged = _pending.TryGetValue(extension.Name, out var enabled);
+        state.Text = staged ? (enabled ? "Enable pending" : "Disable pending")
+            : extension.IsEnabled ? "Loaded" : extension.IsBuiltIn ? "Not verified" : extension.IsAvailable ? "Disabled" : "Missing DLL";
+        state.SetResourceReference(TextBlock.ForegroundProperty, staged ? "WarningBrush"
+            : extension.IsEnabled ? "SuccessBrush" : !extension.IsAvailable ? "WarningBrush" : "MutedBrush");
     }
 
     private void ShowDetails(PhpExtensionInfo extension)
@@ -404,7 +476,18 @@ internal sealed class ExtensionsDialog : Window
     }
 
     private static bool CanToggle(PhpExtensionInfo extension) => !extension.IsBuiltIn && (extension.IsAvailable || extension.IsManaged) && (!extension.IsEnabled || extension.IsManaged);
-    private void OnClosing(object? sender, CancelEventArgs args) { _closed = true; _lifetime.Cancel(); }
+    private void OnClosing(object? sender, CancelEventArgs args)
+    {
+        if (!_token.IsCancellationRequested && (_applying || (_pending.Count != 0 && MessageBox.Show(this,
+            "Discard your pending extension changes?", "Unsaved extension changes", MessageBoxButton.YesNo,
+            MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)))
+        {
+            args.Cancel = true;
+            return;
+        }
+        _closed = true;
+        _lifetime.Cancel();
+    }
     private static Grid RowGrid()
     {
         var grid = new Grid();
@@ -434,6 +517,7 @@ internal static class DialogUi
     internal static Button ActionButton(string content, string styleKey, AppIcon? icon = null)
     {
         var button = new Button { Margin = new Thickness(0) };
+        AutomationProperties.SetName(button, content);
         button.SetResourceReference(FrameworkElement.StyleProperty, styleKey);
         if (icon is null) button.Content = content;
         else

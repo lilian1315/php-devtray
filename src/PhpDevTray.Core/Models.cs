@@ -93,7 +93,15 @@ public sealed record AppSettings
     public bool StartServicesOnLaunch { get; init; }
 }
 
-public sealed record WebSite(string Hostname, string DocumentRoot, string RuntimeId, bool Enabled = true);
+public sealed record WebSite(string Hostname, string DocumentRoot, string RuntimeId, bool Enabled = true)
+{
+    public string? CaddyfileKey { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string CaddyfileName => $"site-{(CaddyfileKey ?? Hostname).ToLowerInvariant()}.Caddyfile";
+}
+
+public sealed record PhpExtensionChange(string Name, bool Enabled);
 
 public sealed record EnvironmentSnapshot
 {

@@ -23,6 +23,7 @@ public interface IEnvironmentManager : IAsyncDisposable
     Task StopServiceAsync(string id, CancellationToken cancellationToken = default);
     Task RestartServiceAsync(string id, CancellationToken cancellationToken = default);
     Task SaveSiteAsync(WebSite site, CancellationToken cancellationToken = default);
+    Task RenameSiteAsync(string currentHostname, string newHostname, CancellationToken cancellationToken = default);
     Task RegisterWebRuntimeAsync(ServiceKind kind, string executable, CancellationToken cancellationToken = default);
     Task RegisterPhpAsync(string phpExecutable, CancellationToken cancellationToken = default);
     Task ActivatePhpVersionAsync(string channel, string version, CancellationToken cancellationToken = default);
@@ -38,6 +39,7 @@ public interface IEnvironmentManager : IAsyncDisposable
     Task InstallReleaseAsync(string releaseId, IProgress<RuntimeInstallProgress>? progress = null, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<PhpExtensionInfo>> GetPhpExtensionsAsync(string channel, CancellationToken cancellationToken = default);
     Task SetPhpExtensionEnabledAsync(string channel, string extension, bool enabled, CancellationToken cancellationToken = default);
+    Task ApplyPhpExtensionChangesAsync(string channel, IReadOnlyList<PhpExtensionChange> changes, CancellationToken cancellationToken = default);
 }
 
 public sealed record MailMessageSummary(string Id, string Subject, string From, string To, DateTimeOffset Created);

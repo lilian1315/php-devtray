@@ -69,60 +69,31 @@ public sealed partial class EnvironmentManager
     }
 
     public Task SetPhpExtensionEnabledAsync(string channel, string extension, bool enabled,
-        CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
+        CancellationToken cancellationToken = default)
+        => ApplyPhpExtensionChangesAsync(channel, [new(extension, enabled)], cancellationToken);
+
+    public Task ApplyPhpExtensionChangesAsync(string channel, IReadOnlyList<PhpExtensionChange> changes,
+        CancellationToken cancellationToken = default)
     {
-        if (channel.StartsWith("franken-", StringComparison.Ordinal))
+        var requested = changes.ToArray();
+        if (requested.Length == 0) return Task.CompletedTask;
+        return ExecuteAsync(async () =>
         {
-            await SetFrankenExtensionAsync(channel, extension, enabled, cancellationToken);
-            return;
-        }
-        var installation = _settings.PhpInstallations.SingleOrDefault(p => p.Channel == channel)
-            ?? throw new InvalidOperationException($"PHP {channel} is not installed.");
-        var proposedInstallation = await _catalog.PrepareExtensionChangeAsync(installation, _settings, extension, enabled, cancellationToken);
-        if (proposedInstallation.EnabledExtensions.SequenceEqual(installation.EnabledExtensions, StringComparer.OrdinalIgnoreCase)) return;
-        var previous = _settings;
-        var proposed = _settings with
-        {
-            PhpInstallations = _settings.PhpInstallations.Select(p => p.Channel == channel ? proposedInstallation : p).ToArray()
-        };
-        var id = $"php:{channel}";
-        var phpWasRunning = _supervisor.IsRunning(id);
-        _definitions.TryGetValue(id, out var previousPhpDefinition);
-        var transitionStarted = false;
-        try
-        {
-            var candidate = await _catalog.BuildPhpAsync(proposedInstallation, proposed, cancellationToken);
-            if (phpWasRunning)
+            if (channel.StartsWith("franken-", StringComparison.Ordinal))
             {
-                transitionStarted = true;
-                await _supervisor.StopAsync(id, TimeSpan.FromSeconds(5), cancellationToken);
-                await _supervisor.StartAsync(candidate, cancellationToken);
-                _definitions[id] = candidate;
+                await ApplyFrankenExtensionChangesAsync(channel, requested, cancellationToken);
+                return;
             }
-            await CommitSettingsAsync(proposed, cancellationToken);
-            Log("Information", $"{(enabled ? "Enabled" : "Disabled")} PHP {channel} extension {extension}");
-        }
-        catch (Exception changeError)
-        {
-            try
+            var installation = _settings.PhpInstallations.SingleOrDefault(p => p.Channel == channel)
+                ?? throw new InvalidOperationException($"PHP {channel} is not installed.");
+            var (candidate, definition) = await _catalog.PreparePhpExtensionCandidateAsync(installation, _settings, requested, cancellationToken);
+            if (candidate.EnabledExtensions.SequenceEqual(installation.EnabledExtensions, StringComparer.OrdinalIgnoreCase)) return;
+            var proposed = _settings with
             {
-                if (transitionStarted)
-                {
-                    await _supervisor.StopAsync(id, TimeSpan.FromSeconds(5), CancellationToken.None);
-                }
-                var recovered = await _catalog.BuildPhpAsync(installation, previous, CancellationToken.None);
-                if (transitionStarted)
-                {
-                    await _supervisor.StartAsync(previousPhpDefinition ?? recovered, CancellationToken.None);
-                    _definitions[id] = previousPhpDefinition ?? recovered;
-                }
-                _settings = previous;
-            }
-            catch (Exception recoveryError)
-            {
-                throw new AggregateException("Extension activation failed and recovery also failed. Inspect the application log.", changeError, recoveryError);
-            }
-            throw;
-        }
-    }, cancellationToken);
+                PhpInstallations = _settings.PhpInstallations.Select(p => p.Channel == channel ? candidate : p).ToArray()
+            };
+            await ActivatePhpConfigurationCoreAsync(candidate, definition, proposed, cancellationToken);
+            Log("Information", $"Applied {requested.Length} extension changes to PHP {channel}");
+        }, cancellationToken);
+    }
 }

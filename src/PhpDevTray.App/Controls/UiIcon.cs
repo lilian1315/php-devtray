@@ -83,7 +83,7 @@ public static class UiIcon
             [AppIcon.Monitor] = "M4.5,3.5 H19.5 A1.5,1.5 0 0 1 21,5 V15 A1.5,1.5 0 0 1 19.5,16.5 H4.5 A1.5,1.5 0 0 1 3,15 V5 A1.5,1.5 0 0 1 4.5,3.5 Z M12,16.5 V21 M7.5,21 H16.5"
         };
         paths[AppIcon.Php] = paths[AppIcon.Code];
-        paths[AppIcon.Sites] = paths[AppIcon.Globe];
+        paths[AppIcon.Sites] = "M3,4.5 H21 V19.5 H3 Z M3,9 H21 M7,6.7 H7.1 M10,6.7 H10.1 M7,13 H12 M7,16 H16";
         paths[AppIcon.Restart] = paths[AppIcon.Refresh];
         var geometries = paths.ToDictionary(pair => pair.Key, pair => { var geometry = Geometry.Parse(pair.Value); geometry.Freeze(); return geometry; });
         geometries[AppIcon.App] = AppLogo.Glyph;

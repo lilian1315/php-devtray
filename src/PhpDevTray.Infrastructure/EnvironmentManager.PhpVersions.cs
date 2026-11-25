@@ -64,11 +64,18 @@ public sealed partial class EnvironmentManager
         };
         // Validate the complete replacement and configured module set before touching live services or published INI files.
         var candidate = await _catalog.BuildPhpCandidateAsync(candidateInstallation, proposed, cancellationToken);
+        await ActivatePhpConfigurationCoreAsync(candidateInstallation, candidate, proposed, cancellationToken);
+    }
+
+    private async Task ActivatePhpConfigurationCoreAsync(PhpInstallation candidateInstallation, ManagedServiceDefinition candidate,
+        AppSettings proposed, CancellationToken cancellationToken)
+    {
+        var previous = _settings;
         var id = candidate.Id;
         var phpWasRunning = _supervisor.IsRunning(id);
         _definitions.TryGetValue(id, out var previousPhpDefinition);
         if (phpWasRunning && previousPhpDefinition is null)
-            throw new InvalidOperationException("The running service has no recoverable managed definition. Stop it before activating another PHP patch.");
+            throw new InvalidOperationException("The running service has no recoverable managed definition. Stop it before applying PHP changes.");
 
         var sourceDirectory = Path.Combine(_dataDirectory, "user", "php", candidateInstallation.Channel, "conf.d");
         var publishedFiles = new[] { Path.Combine(sourceDirectory, "10-extensions.ini"), Path.Combine(sourceDirectory, "90-managed.ini"),

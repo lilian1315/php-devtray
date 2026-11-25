@@ -10,6 +10,7 @@
         <SolidColorBrush x:Key="TextBrush" Color="#202735" />
         <SolidColorBrush x:Key="MutedBrush" Color="#5D6676" />
         <SolidColorBrush x:Key="BorderBrush" Color="#D9DFE8" />
+        <SolidColorBrush x:Key="InputBorderBrush" Color="#76849A" />
         <SolidColorBrush x:Key="DividerBrush" Color="#E6EAF0" />
         <SolidColorBrush x:Key="HoverBrush" Color="#E9EEF5" />
         <SolidColorBrush x:Key="PressedBrush" Color="#DCE5F1" />
@@ -109,12 +110,6 @@
             <Setter Property="Width" Value="40" /><Setter Property="Height" Value="40" /><Setter Property="Padding" Value="0" />
         </Style>
 
-        <Style x:Key="InstallerTabStyle" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
-            <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="16,10"/>
-            <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border></ControlTemplate></Setter.Value></Setter>
-            <Style.Triggers><Trigger Property="Tag" Value="Selected"><Setter Property="Background" Value="{DynamicResource CardBrush}"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger></Style.Triggers>
-        </Style>
         <Style x:Key="NavigationButtonStyle" TargetType="Button" BasedOn="{StaticResource QuietButtonStyle}">
             <Setter Property="Padding" Value="10,8" />
             <Setter Property="HorizontalAlignment" Value="Stretch" />
@@ -133,7 +128,7 @@
             <Setter Property="MinHeight" Value="40" /><Setter Property="Padding" Value="10,8" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}" /><Setter Property="Background" Value="{DynamicResource CardBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" /><Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorderBrush}" /><Setter Property="BorderThickness" Value="1" />
             <Setter Property="CaretBrush" Value="{DynamicResource TextBrush}" /><Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" /><Setter Property="SelectionOpacity" Value="0.25" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Template">
@@ -169,7 +164,7 @@
         <Style TargetType="ComboBox">
             <Setter Property="MinHeight" Value="40" /><Setter Property="Padding" Value="10,7,34,7" /><Setter Property="MaxDropDownHeight" Value="280" />
             <Setter Property="Foreground" Value="{DynamicResource TextBrush}" /><Setter Property="Background" Value="{DynamicResource CardBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" /><Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorderBrush}" /><Setter Property="BorderThickness" Value="1" />
             <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" /><Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
             <Setter Property="ScrollViewer.CanContentScroll" Value="True" /><Setter Property="IsTextSearchEnabled" Value="True" />
             <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusStyle}" />
@@ -227,7 +222,7 @@
                     <ControlTemplate TargetType="CheckBox">
                         <Grid x:Name="CheckLayout" Background="Transparent">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                            <Border x:Name="Box" Width="18" Height="18" CornerRadius="4" Background="{DynamicResource CardBrush}" BorderBrush="{DynamicResource HoverBorderBrush}" BorderThickness="1" VerticalAlignment="Center" Margin="0,0,10,0">
+                            <Border x:Name="Box" Width="18" Height="18" CornerRadius="4" Background="{DynamicResource CardBrush}" BorderBrush="{DynamicResource InputBorderBrush}" BorderThickness="1" VerticalAlignment="Center" Margin="0,0,10,0">
                                 <Grid>
                                     <Path x:Name="Check" Data="M3,8 L6.5,11.5 L13,5" Stroke="{DynamicResource AccentTextBrush}" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed" />
                                     <Path x:Name="Dash" Data="M4,8 H12" Stroke="{DynamicResource AccentTextBrush}" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Visibility="Collapsed" />
@@ -297,6 +292,12 @@
             </Style.Triggers>
         </Style>
 
+        <Style x:Key="RuntimeSelectorStyle" TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}">
+            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="KeyboardNavigation.TabNavigation" Value="Once" />
+            <Setter Property="ItemsPanel"><Setter.Value><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></Setter.Value></Setter>
+        </Style>
         <Style TargetType="ProgressBar">
             <Setter Property="Height" Value="4" /><Setter Property="Background" Value="{DynamicResource DividerBrush}" /><Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
             <Setter Property="Tag" Value="{DynamicResource MotionEnabled}" />

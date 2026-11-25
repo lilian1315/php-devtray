@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using PhpDevTray.Core;
+using PhpDevTray.Infrastructure.Configuration;
 
 namespace PhpDevTray.Infrastructure.Runtimes;
 
@@ -48,41 +49,75 @@ public sealed partial class RuntimeCatalog
         return result;
     }
 
-    /// <summary>Validates a desired extension change in a separate immutable configuration; caller owns persistence and restart.</summary>
     public async Task<PhpInstallation> PrepareExtensionChangeAsync(PhpInstallation installation, AppSettings settings,
         string extension, bool enabled, CancellationToken cancellationToken = default)
+        => (await PrepareExtensionChangesAsync(installation, settings, [new(extension, enabled)], cancellationToken)).Installation;
+
+    internal async Task<(PhpInstallation Installation, ManagedServiceDefinition Definition)> PreparePhpExtensionCandidateAsync(
+        PhpInstallation installation, AppSettings settings, IReadOnlyList<PhpExtensionChange> changes, CancellationToken token)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(extension);
-        if (extension.Contains('/') || extension.Contains('\\'))
-            throw new ArgumentException("Select an extension name, not a filesystem path.", nameof(extension));
-        var name = NormalizeExtensionName(extension);
-        if (!ExtensionName().IsMatch(name)) throw new ArgumentException("Select an extension from the bundled extension inventory.", nameof(extension));
-        var inventory = await GetPhpExtensionsAsync(installation, settings, cancellationToken);
-        var target = inventory.SingleOrDefault(item => string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidOperationException($"The {name} extension is not part of this PHP installation.");
-        if (target.IsBuiltIn) throw new InvalidOperationException($"{name} is built into PHP and cannot be enabled or disabled.");
-        if (enabled && !target.IsAvailable) throw new FileNotFoundException($"The {name} extension DLL is unavailable in PHP {installation.Version}.");
+        RuntimePaths.VerifyExecutable(Path.Combine(installation.Directory, "php.exe"), true);
+        RuntimePaths.VerifyExecutable(Path.Combine(installation.Directory, "php-cgi.exe"), true);
+        RuntimePaths.ValidatePort(installation.Port);
+        var candidate = await PrepareExtensionChangesAsync(installation, settings, changes, token);
+        return (candidate.Installation, CreatePhpDefinition(candidate.Installation, candidate.Configuration));
+    }
 
+    internal async Task<(PhpInstallation Installation, IReadOnlyDictionary<string, string> Environment)> PrepareFrankenExtensionCandidateAsync(
+        PhpInstallation installation, AppSettings settings, IReadOnlyList<PhpExtensionChange> changes, CancellationToken token)
+    {
+        var candidate = await PrepareExtensionChangesAsync(installation, settings, changes, token);
+        var environment = new Dictionary<string, string>(PhpEnvironment(candidate.Configuration.ScanDirectory))
+        {
+            ["PHPRC"] = candidate.Configuration.PrimaryIni
+        };
+        return (candidate.Installation, environment);
+    }
+
+    private async Task<(PhpInstallation Installation, PhpConfiguration Configuration)> PrepareExtensionChangesAsync(
+        PhpInstallation installation, AppSettings settings, IReadOnlyList<PhpExtensionChange> changes, CancellationToken cancellationToken)
+    {
+        var requested = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var change in changes)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(change.Name);
+            if (change.Name.Contains('/') || change.Name.Contains('\\'))
+                throw new ArgumentException("Select an extension name, not a filesystem path.");
+            var name = NormalizeExtensionName(change.Name);
+            if (!ExtensionName().IsMatch(name)) throw new ArgumentException("Select extensions from the bundled extension inventory.");
+            if (!requested.TryAdd(name, change.Enabled)) throw new ArgumentException($"Extension {name} was selected more than once.");
+        }
+
+        var inventory = (await GetPhpExtensionsAsync(installation, settings, cancellationToken))
+            .ToDictionary(item => item.Name, StringComparer.OrdinalIgnoreCase);
         var directives = await ReadUserExtensionDirectivesAsync(installation, cancellationToken);
-        var conflicts = directives.Where(directive => directive.Name is null || string.Equals(directive.Name, name, StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (conflicts.Length > 0)
-            throw new InvalidOperationException($"Cannot {(enabled ? "enable" : "disable")} {name} safely. Extension loading is also controlled by " +
-                string.Join(", ", conflicts.Select(SourceLocation)) + ". Remove or change that directive in its original source, then retry. User configuration was preserved.");
-
         var desired = installation.EnabledExtensions.Select(NormalizeExtensionName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (enabled) desired.Add(name); else desired.Remove(name);
+        foreach (var (name, enabled) in requested)
+        {
+            if (!inventory.TryGetValue(name, out var target))
+                throw new InvalidOperationException($"The {name} extension is not part of this PHP installation.");
+            if (target.IsBuiltIn) throw new InvalidOperationException($"{name} is built into PHP and cannot be enabled or disabled.");
+            if (enabled && !target.IsAvailable) throw new FileNotFoundException($"The {name} extension DLL is unavailable in PHP {installation.Version}.");
+            var conflicts = directives.Where(directive => directive.Name is null ||
+                string.Equals(directive.Name, name, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (conflicts.Length > 0)
+                throw new InvalidOperationException($"Cannot {(enabled ? "enable" : "disable")} {name} safely. Extension loading is also controlled by " +
+                    string.Join(", ", conflicts.Select(SourceLocation)) + ". Remove or change that directive in its original source, then retry.");
+            if (enabled) desired.Add(name); else desired.Remove(name);
+        }
         var candidate = installation with { EnabledExtensions = desired.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray() };
         var configuration = await PreparePhpConfigurationAsync(candidate, settings, cancellationToken, validate: true, publish: false);
         var loaded = await ReadExtensionModulesAsync(candidate, configuration, cancellationToken);
         if (ExtensionDiagnostics(loaded.Result) is { } failure)
             throw new InvalidDataException("The extension change failed PHP startup validation. " + failure);
-        if (loaded.Names.Contains(name) != enabled)
-            throw new InvalidDataException(enabled
-                ? $"The {name} DLL did not load successfully. Its PHP API/build or dependencies may be incompatible."
-                : $"The {name} extension remains loaded from another configuration source; the change was not applied.");
+        foreach (var (name, enabled) in requested)
+            if (loaded.Names.Contains(name) != enabled)
+                throw new InvalidDataException(enabled
+                    ? $"The {name} DLL did not load successfully. Its PHP API/build or dependencies may be incompatible."
+                    : $"The {name} extension remains loaded from another configuration source. Edit that source and try again.");
         foreach (var expected in desired)
             if (!loaded.Names.Contains(expected)) throw new InvalidDataException($"The desired {expected} extension did not load; the change was not applied.");
-        return candidate;
+        return (candidate, configuration);
     }
 
     private async Task<ExtensionModuleResult> ReadExtensionModulesAsync(PhpInstallation installation, PhpConfiguration? configuration,

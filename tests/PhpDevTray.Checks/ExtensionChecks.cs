@@ -59,6 +59,11 @@ internal static class ExtensionChecks
             var zend = await catalog.PrepareExtensionChangeAsync(installation, settings, "Zend OPcache", true);
             Check((await catalog.GetPhpExtensionsAsync(zend, settings)).Single(extension => extension.Name == "opcache") is { IsEnabled: true, IsManaged: true }, "Zend OPcache must normalize and load through zend_extension.");
             Check(runner.SawZendOpcacheDirective, "Zend OPcache was not loaded using its required zend_extension directive.");
+            var mixed = await catalog.PreparePhpExtensionCandidateAsync(enabled, settings, [new("gd", false), new("opcache", true)], default);
+            Check(mixed.Installation.EnabledExtensions.SequenceEqual(["opcache"]), "A mixed batch must apply both directions to one desired state.");
+            var mixedIni = await File.ReadAllTextAsync(Path.Combine(mixed.Definition.Command.EnvironmentVariables["PHP_INI_SCAN_DIR"], "10-extensions.ini"));
+            Check(mixedIni.Contains("zend_extension", StringComparison.Ordinal) && !mixedIni.Contains("php_gd.dll", StringComparison.Ordinal),
+                "A mixed batch must return the validated snapshot containing both changes.");
             Console.WriteLine("PASS: enable/disable and Zend extension semantics are validated without publishing settings or mutating old configuration.");
 
             const string external = "; Preserve this directive\nextension=\"php_gd.dll\"\n";

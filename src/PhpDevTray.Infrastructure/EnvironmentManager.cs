@@ -112,7 +112,7 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
                 foreach (var service in prepared)
                 {
                     if (_supervisor.IsRunning(service.Id)) continue;
-                    await _supervisor.StartAsync(service, cancellationToken);
+                    await StartWebDefinitionAsync(service, cancellationToken);
                     started.Push(service.Id);
                 }
             }
@@ -273,7 +273,7 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
         {
             if (_disposed || _caddy is null) return;
             var sites = _caddy.Sites.Where(site => files.Contains("*") ||
-                files.Contains(Path.GetFileName(CaddyStack.SiteFile(_dataDirectory, site.Hostname)))).ToArray();
+                files.Contains(site.CaddyfileName)).ToArray();
             if (sites.Length == 0) return;
             var values = await (_caddy with { Sites = sites }).ReadSiteRootsAsync(_dataDirectory, _supervisor, _settings, token);
             var updated = new Dictionary<string, string?>(_siteRoots, StringComparer.OrdinalIgnoreCase);
