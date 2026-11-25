@@ -1,0 +1,18 @@
+<DrawingGroup xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+  <!-- The existing sidebar logo: a 34-DIP blue tile with a 22-DIP window glyph. -->
+  <GeometryDrawing Brush="#275DD7">
+    <GeometryDrawing.Geometry>
+      <RectangleGeometry Rect="0,0,34,34" RadiusX="10" RadiusY="10" />
+    </GeometryDrawing.Geometry>
+  </GeometryDrawing>
+  <DrawingGroup>
+    <DrawingGroup.Transform>
+      <MatrixTransform Matrix="0.916666666666667,0,0,0.916666666666667,6,6" />
+    </DrawingGroup.Transform>
+    <GeometryDrawing Geometry="M5,3.5 H19 A1.5,1.5 0 0 1 20.5,5 V19 A1.5,1.5 0 0 1 19,20.5 H5 A1.5,1.5 0 0 1 3.5,19 V5 A1.5,1.5 0 0 1 5,3.5 Z M3.5,8 H20.5 M8,8 V20.5 M6,5.7 H6.1 M9,5.7 H9.1">
+      <GeometryDrawing.Pen>
+        <Pen Brush="White" Thickness="1.65" StartLineCap="Round" EndLineCap="Round" LineJoin="Round" />
+      </GeometryDrawing.Pen>
+    </GeometryDrawing>
+  </DrawingGroup>
+</DrawingGroup>

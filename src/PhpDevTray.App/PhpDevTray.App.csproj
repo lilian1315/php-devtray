@@ -4,9 +4,19 @@
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>PhpDevTray</AssemblyName>
+    <ApplicationIcon>$(MSBuildProjectDirectory)\obj\branding\App.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <Page Remove="Assets/AppLogo.xaml" />
+    <EmbeddedResource Include="Assets/AppLogo.xaml" LogicalName="PhpDevTray.App.Assets.AppLogo.xaml" />
+    <Resource Include="$(ApplicationIcon)" LogicalName="Assets/App.ico" />
     <ProjectReference Include="../PhpDevTray.Core/PhpDevTray.Core.csproj" />
     <ProjectReference Include="../PhpDevTray.Infrastructure/PhpDevTray.Infrastructure.csproj" />
   </ItemGroup>
+  <Target Name="GenerateApplicationIcon" BeforeTargets="PrepareForBuild"
+          Inputs="$(MSBuildProjectDirectory)\Assets\AppLogo.xaml;$(MSBuildProjectDirectory)\..\..\scripts\new-app-icons.ps1"
+          Outputs="$(ApplicationIcon)">
+    <Exec Command="powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\scripts\new-app-icons.ps1&quot; -IconPath &quot;$(ApplicationIcon)&quot;" />
+    <ItemGroup><FileWrites Include="$(ApplicationIcon)" /></ItemGroup>
+  </Target>
 </Project>

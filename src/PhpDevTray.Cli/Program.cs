@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using PhpDevTray.Core;
 
 namespace PhpDevTray.Cli;
 
@@ -9,7 +10,9 @@ internal static class Program
     {
         try
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "launcher.json");
+            var path = AppDeployment.CliSelectionPath;
+            if (!File.Exists(path))
+                throw new InvalidOperationException("No default PHP channel is configured. Open PHP DevTray and select one.");
             await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
             var selection = await JsonSerializer.DeserializeAsync<Selection>(stream, new JsonSerializerOptions(JsonSerializerDefaults.Web));
             if (selection?.ExecutablePath is null || selection.PrimaryIni is null || selection.ScanDirectory is null)

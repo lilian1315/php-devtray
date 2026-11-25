@@ -1,4 +1,4 @@
-name: Build installer
+name: Build Microsoft Store package
 
 on:
   push:
@@ -25,13 +25,16 @@ jobs:
           global-json-file: global.json
       - name: Build, check and publish
         run: ./scripts/build.ps1 -Publish
-      - name: Compile installer
-        run: ./scripts/build-installer.ps1 -CompilerPath "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
-      - name: Upload unsigned installer for testing
+      - name: Build MSIX with a development identity
+        run: ./scripts/build-store-package.ps1 -DevelopmentIdentity
+      - name: Upload development package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: unsigned-installer
-          path: artifacts/installers/*
+          name: development-msix
+          path: |
+            artifacts/store/*.msix
+            artifacts/store/*.msix.sha256
+            artifacts/store/*.msix.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

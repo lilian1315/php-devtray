@@ -27,6 +27,7 @@ internal sealed class SiteDialog : Window
     public SiteDialog(IReadOnlyList<string> channels)
     {
         Title = "Create local site";
+        Icon = AppLogo.WindowIcon;
         Width = 560;
         MinWidth = 500;
         MaxHeight = Math.Max(420, SystemParameters.WorkArea.Height - 48);

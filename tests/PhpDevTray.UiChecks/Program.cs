@@ -25,6 +25,7 @@ internal static class Program
             var preference = themeType.GetMethod("SetPreference")!;
             void SetTheme(ThemePreference value) => preference.Invoke(theme, [value]);
             SetTheme(ThemePreference.Light);
+            PhpDevTray.UiChecks.AppIconChecks.Run();
             var lightBrush = app.Resources["CardBrush"];
             SetTheme(ThemePreference.Light);
             Require(ReferenceEquals(lightBrush, app.Resources["CardBrush"]), "Repeated theme application must reuse cached brushes.");

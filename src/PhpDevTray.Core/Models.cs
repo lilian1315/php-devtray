@@ -85,7 +85,7 @@ public sealed record AppSettings
     public bool PathIntegrationEnabled { get; init; }
     public string? NginxDirectory { get; init; }
     public string? MailpitExecutable { get; init; }
-    public int SmtpPort { get; init; } = 49327;
+    public int SmtpPort { get; init; } = 39327;
     public int MailpitHttpPort { get; init; } = 8025;
     public string LastSection { get; init; } = "PHP Versions";
     public bool StartServicesOnLaunch { get; init; }
@@ -104,7 +104,7 @@ public sealed record EnvironmentSnapshot
     public string? LastError { get; init; }
     public string LastSection { get; init; } = "PHP Versions";
     public bool IsBusy { get; init; }
-    public int SmtpPort { get; init; } = 49327;
+    public int SmtpPort { get; init; } = 39327;
     public int MailpitHttpPort { get; init; } = 8025;
 }
 

@@ -1,4 +1,4 @@
-name: Sign and release installer
+name: Prepare Microsoft Store submission
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag to release (for example v0.7.0-preview)
+        description: Existing version tag to package (for example v0.7.0-preview)
         required: true
         type: string
 
@@ -14,123 +14,53 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: store-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  release:
+  package:
     runs-on: windows-2025
-    environment: release
-    timeout-minutes: 60
-    permissions:
-      actions: read
-      contents: write
+    environment: store
+    timeout-minutes: 30
     defaults:
       run:
         shell: pwsh
-    outputs:
-      tag: ${{ steps.version.outputs.tag }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
-      - name: Validate release version and signing configuration
-        id: version
+      - name: Validate release tag
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
         run: |
           $props = ([xml](Get-Content Directory.Build.props -Raw)).Project.PropertyGroup
-          $version = [string]$props.Version
           $releaseVersion = ([string]$props.InformationalVersion).Split('+')[0]
-          if (-not $releaseVersion) { $releaseVersion = $version }
-          if ($version -notmatch '^\d+\.\d+\.\d+$' -or
-              $releaseVersion -notmatch ('^' + [regex]::Escape($version) + '(-[0-9A-Za-z.-]+)?$') -or
-              $env:RELEASE_TAG -cne "v$releaseVersion") {
+          if (-not $releaseVersion) { $releaseVersion = [string]$props.Version }
+          if ($env:RELEASE_TAG -cne "v$releaseVersion") {
             throw 'The tag must match InformationalVersion (or Version when unset) in Directory.Build.props.'
           }
-          foreach ($name in @('SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG',
-              'SIGNPATH_SIGNING_POLICY_SLUG', 'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG')) {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              throw "Configure $name in the release environment. See docs/RELEASING.md."
-            }
-          }
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "tag=$env:RELEASE_TAG" >> $env:GITHUB_OUTPUT
-          "prerelease=$($releaseVersion.Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          "installer=PhpDevTray-$version-Setup-x64.exe" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           global-json-file: global.json
       - name: Build, check and publish
         run: ./scripts/build.ps1 -Publish
-      - name: Compile installer
-        run: ./scripts/build-installer.ps1 -CompilerPath "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
-      - name: Upload unsigned installer for SignPath provenance
-        id: unsigned
+      - name: Build unsigned Store submission package
+        env:
+          STORE_PACKAGE_NAME: ${{ vars.STORE_PACKAGE_NAME }}
+          STORE_PUBLISHER: ${{ vars.STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.STORE_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          ./scripts/build-store-package.ps1 -PackageName $env:STORE_PACKAGE_NAME `
+            -Publisher $env:STORE_PUBLISHER -PublisherDisplayName $env:STORE_PUBLISHER_DISPLAY_NAME
+      - name: Upload package for Partner Center
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: unsigned-installer
-          path: artifacts/installers/${{ steps.version.outputs.installer }}
+          name: microsoft-store-submission
+          path: |
+            artifacts/store/*.msix
+            artifacts/store/*.msix.sha256
+            artifacts/store/*.msix.json
           if-no-files-found: error
           compression-level: 0
-          retention-days: 14
-      - name: Sign installer with SignPath
-        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
-          wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 1800
-          output-artifact-directory: artifacts/signed
-      - name: Verify signed installer and generate final checksum
-        env:
-          INSTALLER_NAME: ${{ steps.version.outputs.installer }}
-        run: |
-          $installer = Join-Path artifacts/signed $env:INSTALLER_NAME
-          $signature = Get-AuthenticodeSignature -LiteralPath $installer
-          if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate) {
-            throw "Installer must have a valid, timestamped production signature: $($signature.Status)."
-          }
-          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
-          Set-Content -LiteralPath "$installer.sha256" -Value "$hash  $env:INSTALLER_NAME" -Encoding ascii
-      - name: Preserve signed release files
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: signed-installer
-          path: artifacts/signed/*
-          if-no-files-found: error
-          compression-level: 0
-      - name: Publish GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-          INSTALLER_NAME: ${{ steps.version.outputs.installer }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
-        run: |
-          $arguments = @('release', 'create', $env:RELEASE_TAG, '--verify-tag', '--draft', '--generate-notes',
-            "artifacts/signed/$env:INSTALLER_NAME", "artifacts/signed/$env:INSTALLER_NAME.sha256")
-          if ($env:PRERELEASE -eq 'true') { $arguments += '--prerelease' }
-          & gh @arguments
-          if ($LASTEXITCODE -ne 0) { throw 'Release creation failed. Existing release assets are never overwritten.' }
-          & gh release edit $env:RELEASE_TAG --draft=false
-          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed; the draft is available for inspection.' }
-
-  winget:
-    needs: release
-    if: needs.release.outputs.prerelease == 'false'
-    uses: ./.github/workflows/winget.yml
-    with:
-      tag: ${{ needs.release.outputs.tag }}
-    secrets: inherit
+          retention-days: 30

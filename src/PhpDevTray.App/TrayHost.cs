@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using PhpDevTray.Core;
 
@@ -12,8 +13,9 @@ internal sealed class TrayHost : IDisposable
     private const uint IconId = 1;
     private readonly HwndSource _source;
     private readonly DispatcherTimer _animation;
-    private readonly IntPtr[] _frames;
-    private readonly Dictionary<TrayState, IntPtr> _icons;
+    private IntPtr[] _frames = [];
+    private Dictionary<TrayState, IntPtr> _icons = [];
+    private int _iconSize;
     private readonly uint _taskbarCreated;
     private EnvironmentSnapshot? _snapshot;
     private int _frame;
@@ -32,21 +34,15 @@ internal sealed class TrayHost : IDisposable
         });
         _source.AddHook(WindowProcedure);
         _taskbarCreated = RegisterWindowMessage("TaskbarCreated");
-        _icons = new Dictionary<TrayState, IntPtr>
-        {
-            [TrayState.Stopped] = CreateStatusIcon(115, 128, 148),
-            [TrayState.Healthy] = CreateStatusIcon(32, 159, 112),
-            [TrayState.Partial] = CreateStatusIcon(216, 152, 41),
-            [TrayState.Failed] = CreateStatusIcon(204, 62, 78),
-        };
-        _frames = Enumerable.Range(0, 10).Select(i => CreateStatusIcon(60, 112, 228, i)).ToArray();
+        RefreshIconSize();
         _animation = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(100) };
-        _animation.Tick += (_, _) => { _frame = (_frame + 1) % _frames.Length; Modify(); };
+        _animation.Tick += (_, _) => { RefreshIconSize(); _frame = (_frame + 1) % _frames.Length; Modify(); };
         Add();
     }
 
     public void Update(EnvironmentSnapshot snapshot)
     {
+        RefreshIconSize();
         _snapshot = snapshot;
         var statuses = snapshot.Services.Select(s => s.Status).ToArray();
         var busy = snapshot.IsBusy || statuses.Any(IsTransition);
@@ -104,7 +100,11 @@ internal sealed class TrayHost : IDisposable
 
     private IntPtr WindowProcedure(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if ((uint)message == _taskbarCreated) { Add(); handled = true; }
+        if ((uint)message == _taskbarCreated) { RefreshIconSize(); Add(); handled = true; }
+        else if (message is 0x007e or 0x001a or 0x02e0) // display, settings or DPI changed
+        {
+            if (RefreshIconSize()) Modify();
+        }
         if ((uint)message == CallbackMessage)
         {
             var notification = unchecked((uint)lParam.ToInt64()) & 0xffff;
@@ -166,50 +166,43 @@ internal sealed class TrayHost : IDisposable
         SetWindowPos(new WindowInteropHelper(window).Handle, new IntPtr(-1), x, y, width, height, 0x0040);
     }
 
-    private static IntPtr CreateStatusIcon(byte red, byte green, byte blue, int frame = -1)
+    private bool RefreshIconSize()
     {
-        const int size = 32;
-        var pixels = new byte[size * size * 4];
-        for (var y = 0; y < size; y++)
-        for (var x = 0; x < size; x++)
-        {
-            var dx = x - 15.5; var dy = y - 15.5;
-            var distance = Math.Sqrt(dx * dx + dy * dy);
-            var inside = distance <= 13.8;
-            if (!inside) continue;
-            var r = red; var g = green; var b = blue;
-            if (frame >= 0)
-            {
-                if (distance < 8.7) continue;
-                var angle = (Math.Atan2(dy, dx) + Math.PI * 2) % (Math.PI * 2);
-                var phase = (angle / (Math.PI * 2) - frame / 10d + 1) % 1;
-                var opacity = .25 + .75 * phase;
-                r = (byte)(r * opacity); g = (byte)(g * opacity); b = (byte)(b * opacity);
-            }
-            else if ((x is >= 9 and <= 22 && y is >= 9 and <= 12) ||
-                     (x is >= 9 and <= 22 && y is >= 15 and <= 18) ||
-                     (x is >= 9 and <= 22 && y is >= 21 and <= 23))
-            { r = 255; g = 255; b = 255; }
-            var offset = (y * size + x) * 4;
-            pixels[offset] = b; pixels[offset + 1] = g; pixels[offset + 2] = r; pixels[offset + 3] = 255;
-        }
-
-        var bitmap = new BitmapInfo
-        {
-            Header = new BitmapInfoHeader { Size = 40, Width = size, Height = -size, Planes = 1, BitCount = 32, SizeImage = size * size * 4 },
-        };
-        var color = CreateDIBSection(IntPtr.Zero, ref bitmap, 0, out var bits, IntPtr.Zero, 0);
-        if (color == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-        var mask = CreateBitmap(size, size, 1, 1, IntPtr.Zero);
+        var size = NotificationIconSize();
+        if (size == _iconSize) return false;
+        var icons = new Dictionary<TrayState, IntPtr>();
+        var frames = new List<IntPtr>();
         try
         {
-            Marshal.Copy(pixels, 0, bits, pixels.Length);
-            var iconInfo = new IconInfo { IsIcon = true, Mask = mask, Color = color };
-            var icon = CreateIconIndirect(ref iconInfo);
-            if (icon == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-            return icon;
+            icons.Add(TrayState.Stopped, AppLogo.CreateNativeIcon(size));
+            icons.Add(TrayState.Healthy, AppLogo.CreateNativeIcon(size, Color.FromRgb(32, 159, 112)));
+            icons.Add(TrayState.Partial, AppLogo.CreateNativeIcon(size, Color.FromRgb(216, 152, 41)));
+            icons.Add(TrayState.Failed, AppLogo.CreateNativeIcon(size, Color.FromRgb(204, 62, 78)));
+            for (var frame = 0; frame < 10; frame++) frames.Add(AppLogo.CreateNativeIcon(size, Colors.White, frame));
         }
-        finally { DeleteObject(color); if (mask != IntPtr.Zero) DeleteObject(mask); }
+        catch
+        {
+            foreach (var icon in icons.Values.Concat(frames)) AppLogo.DestroyNativeIcon(icon);
+            throw;
+        }
+        foreach (var icon in _icons.Values.Concat(_frames)) AppLogo.DestroyNativeIcon(icon);
+        _icons = icons;
+        _frames = frames.ToArray();
+        _iconSize = size;
+        return true;
+    }
+
+    private int NotificationIconSize()
+    {
+        uint dpi = GetDpiForWindow(_source.Handle);
+        var identifier = new NotifyIconIdentifier { Size = (uint)Marshal.SizeOf<NotifyIconIdentifier>(), Window = _source.Handle, Id = IconId };
+        if (ShellNotifyIconGetRect(ref identifier, out var rect) == 0)
+        {
+            var monitor = MonitorFromRect(ref rect, 2);
+            if (GetDpiForMonitor(monitor, 0, out var monitorDpi, out _) == 0) dpi = monitorDpi;
+        }
+        else if (FindWindow("Shell_TrayWnd", null) is var taskbar && taskbar != IntPtr.Zero) dpi = GetDpiForWindow(taskbar);
+        return Math.Clamp(GetSystemMetricsForDpi(49, dpi == 0 ? 96 : dpi), 16, 256); // SM_CXSMICON
     }
 
     public void Dispose()
@@ -219,7 +212,7 @@ internal sealed class TrayHost : IDisposable
         var data = IconData();
         ShellNotifyIcon(2, ref data);
         _disposed = true;
-        foreach (var icon in _icons.Values.Concat(_frames)) DestroyIcon(icon);
+        foreach (var icon in _icons.Values.Concat(_frames)) AppLogo.DestroyNativeIcon(icon);
         _source.RemoveHook(WindowProcedure);
         _source.Dispose();
     }
@@ -240,9 +233,6 @@ internal sealed class TrayHost : IDisposable
     [StructLayout(LayoutKind.Sequential)] private struct PointNative { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] private struct RectNative { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct MonitorInfo { public uint Size; public RectNative Monitor, WorkArea; public uint Flags; }
-    [StructLayout(LayoutKind.Sequential)] private struct IconInfo { [MarshalAs(UnmanagedType.Bool)] public bool IsIcon; public uint HotspotX, HotspotY; public IntPtr Mask, Color; }
-    [StructLayout(LayoutKind.Sequential)] private struct BitmapInfoHeader { public uint Size; public int Width, Height; public ushort Planes, BitCount; public uint Compression, SizeImage; public int XPels, YPels; public uint Used, Important; }
-    [StructLayout(LayoutKind.Sequential)] private struct BitmapInfo { public BitmapInfoHeader Header; public uint Color; }
     [DllImport("shell32.dll", EntryPoint = "Shell_NotifyIconW", CharSet = CharSet.Unicode)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool ShellNotifyIcon(uint message, ref NotifyIconData data);
     [DllImport("shell32.dll", EntryPoint = "Shell_NotifyIconGetRect")] private static extern int ShellNotifyIconGetRect(ref NotifyIconIdentifier identifier, out RectNative rect);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern uint RegisterWindowMessage(string message);
@@ -257,9 +247,7 @@ internal sealed class TrayHost : IDisposable
     [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
     [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint dpiX, out uint dpiY);
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
-    [DllImport("gdi32.dll", SetLastError = true)] private static extern IntPtr CreateDIBSection(IntPtr dc, ref BitmapInfo bitmapInfo, uint usage, out IntPtr bits, IntPtr section, uint offset);
-    [DllImport("gdi32.dll")] private static extern IntPtr CreateBitmap(int width, int height, uint planes, uint bitsPerPixel, IntPtr bits);
-    [DllImport("gdi32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool DeleteObject(IntPtr handle);
-    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr CreateIconIndirect(ref IconInfo iconInfo);
-    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool DestroyIcon(IntPtr icon);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern int GetSystemMetricsForDpi(int index, uint dpi);
+    [DllImport("user32.dll", EntryPoint = "FindWindowW", CharSet = CharSet.Unicode)] private static extern IntPtr FindWindow(string className, string? windowName);
 }

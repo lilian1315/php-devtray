@@ -28,6 +28,8 @@ internal static class ServiceReadiness
             }
             catch (SocketException exception)
             {
+                if (exception.SocketErrorCode == SocketError.AccessDenied)
+                    throw new InvalidOperationException($"Endpoint {endpoint.Host}:{endpoint.Port} is unavailable. Windows has reserved or denied access to this port. Configure another port; check TCP exclusions with 'netsh interface ipv4 show excludedportrange protocol=tcp'.", exception);
                 throw new InvalidOperationException($"Endpoint {endpoint.Host}:{endpoint.Port} is unavailable. Choose another port or stop the conflicting listener.", exception);
             }
             finally { listener.Stop(); }

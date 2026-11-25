@@ -54,7 +54,6 @@ public static class UiIcon
     {
         var paths = new Dictionary<AppIcon, string>
         {
-            [AppIcon.App] = "M5,3.5 H19 A1.5,1.5 0 0 1 20.5,5 V19 A1.5,1.5 0 0 1 19,20.5 H5 A1.5,1.5 0 0 1 3.5,19 V5 A1.5,1.5 0 0 1 5,3.5 Z M3.5,8 H20.5 M8,8 V20.5 M6,5.7 H6.1 M9,5.7 H9.1",
             [AppIcon.Server] = "M5,3.5 H19 A1.5,1.5 0 0 1 20.5,5 V9 A1.5,1.5 0 0 1 19,10.5 H5 A1.5,1.5 0 0 1 3.5,9 V5 A1.5,1.5 0 0 1 5,3.5 Z M5,13.5 H19 A1.5,1.5 0 0 1 20.5,15 V19 A1.5,1.5 0 0 1 19,20.5 H5 A1.5,1.5 0 0 1 3.5,19 V15 A1.5,1.5 0 0 1 5,13.5 Z M7,7 H7.1 M7,17 H7.1 M11,7 H17 M11,17 H17",
             [AppIcon.Terminal] = "M4.5,4.5 H19.5 A1.5,1.5 0 0 1 21,6 V18 A1.5,1.5 0 0 1 19.5,19.5 H4.5 A1.5,1.5 0 0 1 3,18 V6 A1.5,1.5 0 0 1 4.5,4.5 Z M7,9 L10,12 L7,15 M13,15 H17",
             [AppIcon.Code] = "M8,7 L3,12 L8,17 M16,7 L21,12 L16,17 M13.5,4.5 L10.5,19.5",
@@ -86,6 +85,8 @@ public static class UiIcon
         paths[AppIcon.Php] = paths[AppIcon.Code];
         paths[AppIcon.Sites] = paths[AppIcon.Globe];
         paths[AppIcon.Restart] = paths[AppIcon.Refresh];
-        return paths.ToDictionary(pair => pair.Key, pair => { var geometry = Geometry.Parse(pair.Value); geometry.Freeze(); return geometry; });
+        var geometries = paths.ToDictionary(pair => pair.Key, pair => { var geometry = Geometry.Parse(pair.Value); geometry.Freeze(); return geometry; });
+        geometries[AppIcon.App] = AppLogo.Glyph;
+        return geometries;
     }
 }

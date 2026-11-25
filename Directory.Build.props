@@ -8,5 +8,6 @@
     <AnalysisLevel>latest</AnalysisLevel>
     <Version>0.7.0</Version>
     <InformationalVersion>0.7.0-preview</InformationalVersion>
+    <StorePackageVersion>1.0.0.0</StorePackageVersion>
   </PropertyGroup>
 </Project>

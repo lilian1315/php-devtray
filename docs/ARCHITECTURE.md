@@ -41,6 +41,14 @@ Per-site PHP selection is exposed through the existing validated activation tran
 
 ## Configuration sources
 
+Default listeners use Nginx HTTP `8080`, Mailpit HTTP `8025`, and the uncommon Mailpit SMTP port `39327`, outside Windows' default dynamic range (`49152–65535`). New PHP channels prefer `9000 + <minor channel digits>` and search only `9000–49151`, skipping all configured PHP, SMTP, Mailpit HTTP and site ports. Availability is tested with an exclusive loopback bind, so Windows-excluded ports and existing listeners are skipped. If the upper end is reached, allocation wraps to `9000`. Startup repeats the bind preflight; an access-denied bind reports Windows reservations/permissions explicitly. This reduces collisions but does not guarantee any fixed port is available on every machine.
+
+This beta does not migrate existing port settings. For a profile created with the old SMTP default, set `smtpPort` to `39327` in `settings.json` or start with a new profile, and update SMTP clients accordingly. Existing PHP channel ports and user-owned configuration are retained. The supplied original specification documents the historical `49327` default.
+
+Microsoft Store packaging uses a full-trust MSIX desktop app. `AppDeployment` resolves package identity through `GetCurrentPackageFamilyName`. Packaged builds use a physical workspace under the package's `LocalState/PhpDevTray` directory so the manager, its command alias and downloaded processes share the same paths. Windows retains this data across package updates and removes it on uninstall/reset. Unpackaged builds retain the ordinary `%LOCALAPPDATA%/PhpDevTray` profile. There is no automatic migration between packaged and unpackaged profiles.
+
+The MSIX `php.exe` execution alias targets the bundled CLI, which reads the default package profile's `bin/launcher.json` without starting the tray app. Store settings open Windows' alias controls instead of editing user PATH. Unpackaged builds keep the existing opt-in PATH integration and deployed independent launcher. No virtualization opt-out capabilities are requested. See [Store releases](RELEASING.md) for packaging and acceptance checks.
+
 PHP source lives in `user/php/<channel>/conf.d/`. Each validated launch configuration is snapshotted under `data/state/php-config/`. The CLI launcher's atomically replaced `bin/launcher.json` selects one executable, primary INI, and resolved scan directory together. Changing a user INI file requires a subsequent start/restart to create and validate the new snapshot.
 
 Nginx user root and sites live in `user/nginx/`. The implemented markers are `@pdt/sites@`, `@pdt/mime@`, and `@pdt/php/<site-id>@`, each inside a quoted include directive. These source files must be compiled by the manager before being used by Nginx. The generated bootstrap includes an immutable candidate root with concrete paths. General nested includes are not accepted by this milestone.

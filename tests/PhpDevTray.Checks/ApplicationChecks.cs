@@ -23,6 +23,8 @@ internal static class ApplicationChecks
             await using var supervisor = new RecordingSupervisor();
             var catalog = new RuntimeCatalog(root, supervisor);
             var initial = await catalog.LoadAsync();
+            Check(initial.SmtpPort == 39327 && initial.SmtpPort < 49152,
+                "Default SMTP must use the uncommon port 39327, outside Windows' default dynamic/reserved range.");
             Check(initial.PhpInstallations.Count == 0, "New data directory must contain no invented runtimes.");
             Check(!initial.PathIntegrationEnabled, "PATH integration must be opt-in.");
             var saved = initial with { LastSection = "Logs", Sites = [validSite] };

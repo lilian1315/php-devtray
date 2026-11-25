@@ -36,6 +36,32 @@ public static class RuntimeChecks
             var site = new SiteDefinition { Id = "app", Hostname = "app.test", DocumentRoot = documentRoot, PhpChannel = "8.4" };
             var settings = new AppSettings { PhpInstallations = [php], DefaultPhpChannel = "8.4", NginxDirectory = nginxDirectory, Sites = [site] };
 
+            var probes = new List<int>();
+            var reservedSettings = settings with
+            {
+                PhpInstallations = [php with { Port = 9087 }], Sites = [site with { Port = 9084 }],
+                SmtpPort = 9085, MailpitHttpPort = 9086
+            };
+            var allocated = RuntimeCatalog.AllocatePort(9084, reservedSettings, port => { probes.Add(port); return port != 9088; });
+            Require(allocated == 9089 && probes.SequenceEqual([9088,9089]),
+                "PHP allocation must skip configured site/service ports and unavailable bind probes.");
+            probes.Clear();
+            allocated = RuntimeCatalog.AllocatePort(60000, settings, port => { probes.Add(port); return port == 9000; });
+            Require(allocated == 9000 && probes.SequenceEqual([49151,9000]),
+                "PHP allocation must wrap below 49152 without probing Windows' default dynamic range.");
+            var attempted = 0;
+            RequireThrows<InvalidOperationException>(() => RuntimeCatalog.AllocatePort(49151, settings, port =>
+            {
+                Require(port is >= 9000 and < 49152, "Automatic PHP allocation entered the dynamic range.");
+                attempted++;
+                return false;
+            }));
+            Require(attempted > 0 && attempted <= 49152 - 9000, "Port allocation must terminate when all candidates are unavailable.");
+            var mail = await catalog.BuildMailpitAsync(settings with { MailpitExecutable = importedMailpit });
+            Require(mail.Command.Arguments.Contains("127.0.0.1:39327") && mail.HealthEndpoints.Any(e => e.Kind == HealthCheckKind.Smtp && e.Port == 39327),
+                "Mailpit command and readiness checks must agree on the new SMTP default.");
+            Console.WriteLine("PASS: uncommon SMTP default and bounded PHP allocation avoid dynamic ports, configured endpoints and unavailable bind probes.");
+
             await catalog.SaveAsync(settings);
             await catalog.SaveAsync(settings with { LastSection = "Logs" });
             Require(File.Exists(Path.Combine(directory, "settings.json.bak")), "Atomic settings update must retain a backup.");
@@ -51,6 +77,8 @@ public static class RuntimeChecks
             var custom = Path.Combine(directory, "user", "php", "8.4", "conf.d", "20-custom.ini");
             await File.WriteAllTextAsync(custom, "memory_limit=256M\n; unique user content\n");
             var secondDefinition = await catalog.BuildPhpAsync(php, settings);
+            Require((await File.ReadAllTextAsync(Path.Combine(secondDefinition.Command.EnvironmentVariables["PHP_INI_SCAN_DIR"], "90-managed.ini"))).Contains("smtp_port=39327", StringComparison.Ordinal),
+                "Generated PHP mail configuration must use the same SMTP default as Mailpit.");
             var currentScan = secondDefinition.Command.EnvironmentVariables["PHP_INI_SCAN_DIR"];
             Require(originalScan != currentScan, "Applying user INI changes must create a new immutable configuration generation.");
             Require(!((await File.ReadAllTextAsync(Path.Combine(originalScan, "20-custom.ini"))).Contains("unique user content", StringComparison.Ordinal)), "Old CLI configuration snapshots must not mutate.");

@@ -309,6 +309,8 @@ public sealed partial class RuntimeCatalog
 
     public async Task SetPathIntegrationAsync(bool enabled, CancellationToken cancellationToken = default)
     {
+        if (AppDeployment.IsPackaged)
+            throw new InvalidOperationException("Manage the PHP DevTray php.exe alias in Windows Settings > App execution aliases.");
         cancellationToken.ThrowIfCancellationRequested();
         var directory = Path.Combine(_root, "bin");
         if (enabled && !File.Exists(Path.Combine(directory, "php.exe")))
@@ -522,12 +524,19 @@ public sealed partial class RuntimeCatalog
         }
     }
 
-    private static int AllocatePort(int preferred, AppSettings settings)
+    internal static int AllocatePort(int preferred, AppSettings settings, Func<int, bool>? isAvailable = null)
     {
-        var used = settings.PhpInstallations.Select(p => p.Port).Append(settings.SmtpPort).Append(settings.MailpitHttpPort).ToHashSet();
-        for (var port = Math.Clamp(preferred, 9000, 60000); port < 65000; port++)
-            if (!used.Contains(port) && RuntimePaths.IsPortAvailable(port)) return port;
-        throw new InvalidOperationException("No free loopback FastCGI port was found.");
+        const int first = 9000, last = 49151;
+        var used = settings.PhpInstallations.Select(p => p.Port).Concat(settings.Sites.Select(s => s.Port))
+            .Append(settings.SmtpPort).Append(settings.MailpitHttpPort).ToHashSet();
+        var start = Math.Clamp(preferred, first, last);
+        isAvailable ??= RuntimePaths.IsPortAvailable;
+        for (var offset = 0; offset <= last - first; offset++)
+        {
+            var port = first + (start - first + offset) % (last - first + 1);
+            if (!used.Contains(port) && isAvailable(port)) return port;
+        }
+        throw new InvalidOperationException("No available loopback FastCGI port was found between 9000 and 49151. Check Windows TCP exclusions and other running applications.");
     }
 
     private void ValidateSettings(AppSettings settings)

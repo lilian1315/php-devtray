@@ -81,33 +81,26 @@ internal sealed class ManagerWindow : Window
         _manager = manager; _snapshot = manager.Snapshot;
         _section = Sections.Contains(_snapshot.LastSection) ? _snapshot.LastSection : Sections[0];
         Title = "PHP DevTray"; Width = 1000; Height = 740; MinWidth = 560; MinHeight = 500;
+        Icon = AppLogo.WindowIcon;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         ShowInTaskbar = true; WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanResize;
         AllowsTransparency = false; Topmost = false; SetResourceReference(BackgroundProperty, "SurfaceBrush");
         var layout = new Grid();
         layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(184) });
         layout.ColumnDefinitions.Add(new ColumnDefinition());
-        var shell = Surface(layout, "SurfaceBrush", 14, new Thickness(0));
+        var shell = new Border { Child = layout };
+        shell.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush");
         shell.ClipToBounds = true; Content = shell;
 
         var sidebar = new DockPanel { LastChildFill = true, Margin = new Thickness(12, 21, 12, 13) };
-        var sidebarSurface = new Border { Child = sidebar, CornerRadius = new CornerRadius(14, 0, 0, 14), BorderThickness = new Thickness(0, 0, 1, 0) };
+        var sidebarSurface = new Border { Child = sidebar, BorderThickness = new Thickness(0, 0, 1, 0) };
         sidebarSurface.SetResourceReference(Border.BackgroundProperty, "SidebarBrush");
         sidebarSurface.SetResourceReference(Border.BorderBrushProperty, "DividerBrush");
         layout.Children.Add(sidebarSurface);
-        var brand = new StackPanel { Margin = new Thickness(9, 0, 0, 27) };
-        var brandMark = new Border { Width = 34, Height = 34, CornerRadius = new CornerRadius(10), HorizontalAlignment = HorizontalAlignment.Left, Child = UiIcon.Create(AppIcon.App, 22, "AccentTextBrush"), Padding = new Thickness(6) };
-        brandMark.SetResourceReference(Border.BackgroundProperty, "AccentBrush");
-        brand.Children.Add(brandMark);
-        brand.Children.Add(T("PHP DevTray", 15, true, margin: new Thickness(0, 11, 0, 1)));
-        brand.Children.Add(T("PHP DEVELOPMENT", 10, muted: true));
-        DockPanel.SetDock(brand, Dock.Top); sidebar.Children.Add(brand);
         var lower = new StackPanel();
         lower.Children.Add(Nav("Settings", "Settings", AppIcon.Settings));
-        lower.Children.Add(T("Local development", 10, muted: true, margin: new Thickness(12, 16, 0, 0)));
         DockPanel.SetDock(lower, Dock.Bottom); sidebar.Children.Add(lower);
         var nav = new StackPanel();
-        nav.Children.Add(T("WORKSPACE", 10, muted: true, margin: new Thickness(12, 0, 0, 9)));
         nav.Children.Add(Nav("PHP Versions", "PHP runtimes", AppIcon.Terminal));
         nav.Children.Add(Nav("Nginx Sites", "Nginx", AppIcon.Globe));
         nav.Children.Add(Nav("Mail Trap", "Mail Trap", AppIcon.Mail));
@@ -173,8 +166,6 @@ internal sealed class ManagerWindow : Window
             var compact = ActualWidth < 730;
             foreach (var glyph in _serviceGlyphs) glyph.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
             layout.ColumnDefinitions[0].Width = new GridLength(compact ? 64 : 184);
-            brand.Margin = compact ? new Thickness(3, 0, 0, 27) : new Thickness(9, 0, 0, 27);
-            foreach (var text in brand.Children.OfType<TextBlock>()) text.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
             foreach (var text in nav.Children.OfType<TextBlock>().Concat(lower.Children.OfType<TextBlock>())) text.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
             foreach (var button in _navigation.Values)
             {
@@ -727,8 +718,17 @@ internal sealed class ManagerWindow : Window
             AutomationProperties.SetName(_defaultPhpPicker, "Default command-line PHP version"); _defaultPhpPicker.SelectionChanged += async (_, _) => { if (!_updatingInputs && _defaultPhpPicker.SelectedItem is string channel && channel != _snapshot.DefaultPhpChannel) await RunAsync("Changing default PHP…", () => _manager.SetDefaultPhpAsync(channel, _lifetime.Token)); }; row.Children.Add(_defaultPhpPicker); cli.Children.Add(row);
         }
         else cli.Children.Add(T("Install PHP to choose a command-line version.", 12, muted: true));
-        _pathSetting = new CheckBox { Content = "Make PHP available in terminals", Margin = new Thickness(0, 11, 0, 0), IsChecked = _snapshot.PathIntegrationEnabled };
-        AutomationProperties.SetName(_pathSetting, "Enable PHP in the user PATH"); _pathSetting.Click += async (_, _) => { if (!_updatingInputs) { var enabled = _pathSetting.IsChecked == true; await RunAsync("Updating terminal integration…", () => _manager.SetPathIntegrationAsync(enabled, _lifetime.Token)); } }; cli.Children.Add(_pathSetting); settings.Children.Add(Surface(cli, "CardBrush", 10, new Thickness(17)));
+        if (AppDeployment.IsPackaged)
+        {
+            cli.Children.Add(T("Windows provides the php command through an app execution alias. Manage it in Windows Settings if another PHP installation uses the same command.", 11, muted: true, margin: new Thickness(0, 11, 0, 8)));
+            cli.Children.Add(ActionButton("Manage command alias", () => OpenPathAsync("ms-settings:appsfeatures-appexecutionalias"), "QuietButtonStyle", independent: true));
+        }
+        else
+        {
+            _pathSetting = new CheckBox { Content = "Make PHP available in terminals", Margin = new Thickness(0, 11, 0, 0), IsChecked = _snapshot.PathIntegrationEnabled };
+            AutomationProperties.SetName(_pathSetting, "Enable PHP in the user PATH"); _pathSetting.Click += async (_, _) => { if (!_updatingInputs) { var enabled = _pathSetting.IsChecked == true; await RunAsync("Updating terminal integration…", () => _manager.SetPathIntegrationAsync(enabled, _lifetime.Token)); } }; cli.Children.Add(_pathSetting);
+        }
+        settings.Children.Add(Surface(cli, "CardBrush", 10, new Thickness(17)));
         var storage = new DockPanel { Margin = new Thickness(1, 19, 0, 0) }; var folder = ActionButton("Open folder", () => OpenPathAsync(_snapshot.DataDirectory), "QuietButtonStyle", AppIcon.Folder, independent: true); DockPanel.SetDock(folder, Dock.Right); storage.Children.Add(folder); var storageText = new StackPanel(); storageText.Children.Add(T("Workspace files", 12, true)); var path = T(_snapshot.DataDirectory, 10, muted: true, margin: new Thickness(0, 5, 0, 0));  storageText.Children.Add(path); storage.Children.Add(storageText); settings.Children.Add(storage);
         _contentHost.Children.Add(Scroll(settings));
     }

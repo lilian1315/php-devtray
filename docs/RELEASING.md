@@ -1,63 +1,76 @@
-# GitHub releases, SignPath and WinGet
+# Microsoft Store releases
 
-The workflows build the self-contained Windows x64 application, run the existing checks, compile the Inno Setup installer, sign it through SignPath, publish its signed bytes and checksum to GitHub Releases, and submit stable releases to the WinGet community repository.
+PHP DevTray is packaged as a self-contained Windows x64 MSIX for submission to Microsoft Store. Microsoft signs the package after certification and distributes app updates. No SignPath account, signing certificate, installer hosting, or WinGet submission is used. This repository prepares an upload artifact; it does not automatically submit or publish in Partner Center.
 
-## One-time configuration
+## One-time setup
 
-Push this repository to a public GitHub repository. Create a GitHub Actions environment named **release**. Restrict its allowed deployment refs to release tags (`v*`); configure required reviewers if appropriate for the project. The workflows use GitHub-hosted `windows-2025` runners, the SDK selected by `global.json`, and the runner's preinstalled Inno Setup 6 compiler. Pull requests and branch pushes only build unsigned installers and do not use release secrets.
+1. Register a [Microsoft Store developer account](https://developer.microsoft.com/microsoft-store/register/) and reserve the app name in Partner Center. Choose the **MSIX/AppX** submission route. The MSI/EXE route still requires publisher-managed signing and is not used here.
+2. The reserved app identity is already recorded in `packaging/AppxManifest.xml`: package name `LilianMoulanier.PHPDevTray`, publisher `CN=737AB8E3-B8A7-4EB3-B41A-E15E782D42DB`, and publisher display name `Lilian Moulanier`. These are public identifiers. Keep them consistent with **Product management > Product identity** in Partner Center.
+3. Create a GitHub Actions environment named **store**. Restrict deployment refs to release tags (`v*`) and configure reviewers if desired. No variables or secrets are required with the committed identity. The workflow also supports these optional environment variables to override it:
 
-Configure these environment secrets:
-
-| Secret | Purpose |
+| Variable | Partner Center value |
 | --- | --- |
-| `SIGNPATH_API_TOKEN` | SignPath CI user token authorized for the project and production signing policy. |
-| `WINGET_GITHUB_TOKEN` | GitHub **classic PAT** with `public_repo`, belonging to an account allowed to fork and submit pull requests to `microsoft/winget-pkgs`. The repository's `GITHUB_TOKEN` cannot submit cross-repository PRs. |
+| `STORE_PACKAGE_NAME` | `Package/Identity/Name` |
+| `STORE_PUBLISHER` | `Package/Identity/Publisher`, including `CN=` |
+| `STORE_PUBLISHER_DISPLAY_NAME` | `Package/Properties/PublisherDisplayName` |
 
-Configure these environment variables:
+No Store API credentials are needed for the manual upload flow. Old `release` environment secrets and variables used for SignPath and WinGet can be removed from GitHub separately; deleting the workflows does not delete server-side configuration.
 
-| Variable | Value |
-| --- | --- |
-| `SIGNPATH_ORGANIZATION_ID` | SignPath organization ID. |
-| `SIGNPATH_PROJECT_SLUG` | SignPath project linked to this GitHub repository. |
-| `SIGNPATH_SIGNING_POLICY_SLUG` | Production policy with a publicly trusted Authenticode certificate and timestamping. Test certificates fail the release checks. |
-| `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` | Artifact configuration containing [this XML](../installer/signpath-artifact-configuration.xml). |
-| `WINGET_PACKAGE_IDENTIFIER` | A unique identifier such as `YourPublisher.PhpDevTray`. Keep this identifier stable after the first WinGet submission. |
-| `WINGET_LICENSE` | The application's actual license identifier or name. Decide the license and add its terms to the repository before publishing. There is currently no application license file; third-party notices do not license the application. |
+## Versioning
 
-In SignPath, install/authorize the SignPath GitHub App for this repository, add GitHub.com as a trusted build system, and link the project to the repository. Import `installer/signpath-artifact-configuration.xml` into the configured artifact configuration. It requires one matching installer EXE inside the ZIP produced by `actions/upload-artifact`. Configure signing permissions and any required signing approvals in the production policy. Signing waits up to 30 minutes for completion.
+`Directory.Build.props` contains two related versions:
 
-The GitHub release job has `actions: read` for SignPath provenance and `contents: write` for Releases. External actions are pinned to commit SHAs. The WinGet job receives its PAT only through environment variables; the token is never passed as a command-line argument. WinGet Create is downloaded from the pinned Microsoft release `v1.12.13.0`, checked against its GitHub asset SHA-256 digest, and checked for a valid Microsoft Authenticode signature before execution.
+- `Version` and `InformationalVersion` describe the app, currently `0.7.0` / `0.7.0-preview`. The Git tag must match `v` plus `InformationalVersion` without build metadata: currently `v0.7.0-preview`.
+- `StorePackageVersion` is the four-part numeric MSIX identity version, initially `1.0.0.0`. Its first part must be nonzero; its fourth part must stay `0` for Store use. Increment this version for each new package version sent to the Store, including previews. The Store version does not mean the app has reached feature version 1.0.
 
-## Release a version
+Preview suffixes cannot be encoded in an MSIX identity version. Use a private audience/package flight in Partner Center to test a preview before public availability; a `-preview` Git tag by itself does not create a private Store release. The workflow only builds the package.
 
-1. Set `Version` and `InformationalVersion` in `Directory.Build.props`. `Version` is a numeric `major.minor.patch` used by the installer. For a stable release, set `InformationalVersion` to that same value. For a preview, use a suffix such as `0.7.0-preview`.
-2. Commit and push the changes. Create and push a tag matching `v` plus `InformationalVersion`, without build metadata. For the current source, this is `v0.7.0-preview`; a stable `v0.7.0` requires removing the preview suffix first.
-3. The **Sign and release installer** workflow builds and checks the tagged source, compiles and uploads the unsigned installer for SignPath provenance, signs it, and rejects any signature that is invalid or lacks a timestamp.
-4. It generates a new SHA-256 sidecar from the **signed** EXE, uploads the signed files as a workflow artifact, creates a draft release with both files attached, and publishes it. Preview tags produce GitHub prereleases and skip WinGet.
-5. Stable releases call **Submit release to WinGet**. This downloads the public signed release asset, verifies its signature and version, generates and saves the three manifest files, and submits them using Microsoft's WinGet Create. That tool validates the YAML through its bundled WinGetUtil before submitting, without depending on a preinstalled `winget` CLI on the runner.
+## Build and submit
 
-WinGet publication is a pull request to `microsoft/winget-pkgs`. Availability in `winget install` follows Microsoft's validation and merge; a successful workflow means the PR was submitted, not that it has already merged. The same generation path supports both the initial package submission and later versions. Package name, publisher and uninstall product code are read from the installer source so they match Installed apps registration. The manifest describes a per-user x64 Inno installer and hashes the signed release asset. PHP distributions remain separately managed by the app.
+1. Set the versions, commit and push, then push a matching release tag, or manually run **Prepare Microsoft Store submission** with an existing tag.
+2. The workflow uses a GitHub-hosted `windows-2025` runner, the SDK selected by `global.json`, and the runner's Windows SDK `MakeAppx.exe`. It builds the app, runs the existing checks, publishes both the WPF app and CLI self-contained, validates the source/payload version, generates icons and the manifest, and packages with MakeAppx validation enabled.
+3. Download the **microsoft-store-submission** workflow artifact. Upload its `.msix` to the app's **Packages** page in Partner Center. The checksum and JSON identity summary are for verification and are not uploaded as packages.
+4. Complete the listing, screenshots, privacy policy, support information, age ratings, pricing/availability and certification notes in Partner Center. Set the intended audience/release schedule, then submit for certification. Microsoft signs accepted MSIX packages; do not upload the old Inno Setup EXE or a development-identity package.
+5. Customers install and update through Microsoft Store after approval/publication. GitHub Actions success means the upload artifact is ready, not that the app is live.
 
-Only the outer installer is signed by this workflow. Signing the packaged application/CLI or the generated uninstaller would require additional signing stages.
+Branch pushes and pull requests run **Build Microsoft Store package**, using a clearly marked development identity and no Store configuration. Its **development-msix** artifact is only for packaging verification; it cannot be submitted as this app's Store package.
 
-## Retries and local verification
+## Local build
 
-Run **Sign and release installer** manually with an existing tag to retry a failure before release creation. Published release files are never overwritten. If draft publication failed, inspect the draft and finish publishing it, or delete that unpublished draft before retrying; do not replace an already public installer because WinGet pins its hash.
-
-Run **Submit release to WinGet** manually with an existing stable release tag to retry just the WinGet stage. Inspect existing submissions before retrying: WinGet accepts only one PR per package version. The generated `winget-manifests` artifact is retained even if validation or submission fails.
-
-To generate manifests locally, use the signed release installer, then validate the result:
+Requirements: Windows x64, .NET 10 SDK, PowerShell, and Windows SDK with `MakeAppx.exe` (10.0.19041 or newer). The script discovers an installed x64 Windows SDK, or accepts `-MakeAppxPath` explicitly.
 
 ```powershell
-.\scripts\new-winget-manifest.ps1 `
-  -InstallerPath .\artifacts\signed\PhpDevTray-0.7.0-Setup-x64.exe `
-  -PackageIdentifier YourPublisher.PhpDevTray `
-  -License YourActualLicense `
-  -Repository YourGitHubAccount/YourRepository `
-  -Tag v0.7.0
-winget validate --manifest .\artifacts\winget
+.\scripts\build.ps1 -Publish
+.\scripts\build-store-package.ps1
 ```
 
-The ordinary local installer build remains unsigned. Build/download outputs, tools and manifests belong under the ignored `artifacts/` directory.
+The package uses the committed Partner Center identity by default. `-PackageName`, `-Publisher` and `-PublisherDisplayName` can override it. To check packaging with a separate development identity instead:
 
-References: [SignPath GitHub integration](https://docs.signpath.io/trusted-build-systems/github), [artifact configuration syntax](https://docs.signpath.io/artifact-configuration/syntax), [WinGet manifests](https://learn.microsoft.com/windows/package-manager/package/manifest), [WinGet Create submission](https://github.com/microsoft/winget-create/blob/main/doc/submit.md), and [CI token setup](https://github.com/microsoft/winget-create/blob/main/doc/token.md).
+```powershell
+.\scripts\build-store-package.ps1 -DevelopmentIdentity
+```
+
+Outputs are under ignored `artifacts/store/`: the unsigned `.msix`, SHA-256 sidecar, identity summary, and a fresh `layout-<id>` directory for inspection. The existing application logo has one vector source, `src/PhpDevTray.App/Assets/AppLogo.xaml`. `scripts/new-app-icons.ps1` renders it into the native multi-size ICO during every app build and into Store PNGs through `scripts/new-store-assets.ps1`. Window/taskbar and notification icons use this same logo; notification status is a small badge, rendered at the taskbar monitor's DPI. The full app and `cli/` bundle are included; PHP, Nginx and Mailpit distributions and user data are not packaged.
+
+To export the same logo for the Store listing (300px/1024px PNG and SVG), run `scripts/new-app-icons.ps1 -OutputDirectory artifacts/store-listing -ListingAssets`.
+
+The unsigned package is intended for Store upload, not installation by customers. For local packaged testing, use Developer Mode and register its layout with `Add-AppxPackage -Register <absolute-layout-path>\AppxManifest.xml`, or sign a copy with a locally trusted test certificate. Do not add the special unsigned-testing publisher OID to a Store submission identity. Test-only signing/trust and Developer Mode are not enabled by the build scripts.
+
+## Certification and packaged acceptance
+
+The app is a full-trust desktop application (`packagedClassicApp`, `mediumIL`) and declares **runFullTrust**. In Partner Center, explain that it manages explicitly downloaded/imported PHP, Nginx and Mailpit processes for local development, reads selected site folders, opens loopback listeners, and uses Windows Job Objects to contain owned service processes. There is no Windows Service or administrator elevation. Microsoft reviews capability requests and the app's runtime downloads; packaging alone does not establish Store eligibility.
+
+Store workspace data is stored under `%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalState\PhpDevTray`. It survives app updates, but Windows removes package-owned data on uninstall/reset. Export anything you want to retain first. Unpackaged development builds use `%LOCALAPPDATA%\PhpDevTray`; existing development profiles are not automatically migrated.
+
+Command-line PHP uses a package execution alias, **php.exe**, managed in Windows Settings > App execution aliases. The alias and manager read the same package-owned selection; CLI processes remain independent of the tray's service Jobs. Store builds do not modify user PATH. Another PHP installation earlier in PATH can take precedence; use `where.exe php` to diagnose. The alias uses the default Store profile, even if the manager is launched with a custom `--data-directory` for testing.
+
+Before a public submission, run Windows App Certification Kit on the package and test an installed package, ideally through a private Store flight:
+
+- Start menu launch, tray restore, minimize/close preserving services, and explicit Exit stopping them.
+- Runtime downloads/imports, Visual C++ prerequisites, PHP extensions, Nginx site access outside package storage, Mailpit capture, and PHP patch activation/recovery.
+- `php -v`, arguments, working directory, stdin/stdout/stderr, exit codes and CLI lifetime after tray Exit; enable/disable the alias and test conflicts with another PHP installation.
+- Update an installed package to a higher `StorePackageVersion`, confirm workspace retention, and verify uninstall/reset behavior using a disposable profile. Exit the tray app and stop independent CLI sessions before testing an update.
+
+These packaged-runtime checks require an installed package and are separate from the existing unpackaged process/UI regression checks and MakeAppx schema validation.
+
+References: [Store signing](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options), [package requirements and versioning](https://learn.microsoft.com/windows/apps/publish/publish-your-app/package-version-numbering?pivots=store-installer-msix), [desktop packaging behavior](https://learn.microsoft.com/windows/msix/desktop/desktop-to-uwp-behind-the-scenes), [app execution aliases](https://learn.microsoft.com/windows/apps/desktop/modernize/desktop-to-uwp-extensions#start-your-application-by-using-an-alias), and [Store policies](https://learn.microsoft.com/windows/apps/publish/store-policies).

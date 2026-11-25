@@ -40,6 +40,7 @@ internal sealed class ExtensionsDialog : Window
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(ownerLifetime);
         _token = _lifetime.Token;
         Title = $"PHP {channel} extensions";
+        Icon = AppLogo.WindowIcon;
         Width = 680;
         Height = 760;
         MinWidth = 580;

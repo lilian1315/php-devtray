@@ -9,8 +9,7 @@ namespace PhpDevTray.Infrastructure;
 
 public static class Bootstrapper
 {
-    public static IEnvironmentManager CreateDefault() => Create(Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PhpDevTray"));
+    public static IEnvironmentManager CreateDefault() => Create(AppDeployment.DefaultDataDirectory);
 
     public static IEnvironmentManager Create(string dataDirectory, IProcessSupervisor? supervisor = null)
     {

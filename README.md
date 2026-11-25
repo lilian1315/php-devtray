@@ -10,9 +10,9 @@ This is **0.7.0 preview**: a normal resizable desktop window that hides to the t
 
 ## Install
 
-Run [PhpDevTray-0.7.0-Setup-x64.exe](artifacts/installers/PhpDevTray-0.7.0-Setup-x64.exe). It installs for your Windows account, adds Start menu access and supports uninstall. Your runtimes, settings and captured mail are kept separately. See [installer details](docs/INSTALLER.md).
+Microsoft Store is the intended distribution channel. The app is not published yet. GitHub Actions builds a self-contained Windows x64 MSIX; tagged builds use the registered Partner Center identity and produce an upload artifact. Microsoft signs and distributes accepted packages. See [Store setup and submission](docs/RELEASING.md).
 
-GitHub Actions builds the installer, signs tagged releases through SignPath, and submits stable releases to WinGet. See [release setup](docs/RELEASING.md) for the required repository configuration.
+Store builds provide Start menu access and a Windows-managed `php.exe` command alias. Package-owned runtimes, settings and captured mail survive app updates, but are removed on uninstall/reset. Back up workspace files first. Developer builds can still run directly from the published folder below.
 
 ## Run
 
@@ -26,7 +26,7 @@ To launch the application from a terminal, run:
 .\artifacts\releases\0.7.0\PhpDevTray.exe
 ```
 
-Normal application data is stored in `%LOCALAPPDATA%\PhpDevTray`. No runtimes are bundled or started on first launch. PATH integration is off until explicitly enabled.
+Unpackaged application data is stored in `%LOCALAPPDATA%\PhpDevTray`. Store builds use `%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalState\PhpDevTray`. No runtimes are bundled or started on first launch. Unpackaged PATH integration is off until explicitly enabled; Store builds use Windows' App execution aliases controls instead.
 
 For an isolated development profile:
 
@@ -43,8 +43,8 @@ Exit the older tray instance before opening the new executable. Only one ordinar
    Alternatively, use **Add runtime / Import extracted runtime** to select `php.exe`, `nginx.exe`, or Mailpit's executable from a distribution you have verified yourself. The manager validates and copies it into managed storage. Retain PHP's full distribution and Nginx's `conf/` directory.
 3. Create a site with an existing document root, installed PHP channel, and hostname such as `app.test`. The default HTTP port is **8080**.
 4. Configure that hostname in Windows hosts/DNS yourself. The manager does not modify the hosts file. Without DNS, use an explicit Host header for testing: `curl.exe -H "Host: app.test" http://127.0.0.1:8080/`.
-5. Start the environment. Mailpit uses loopback SMTP **49327** and HTTP **8025**. PHP FastCGI ports are allocated separately for each minor channel.
-6. Select a default PHP channel. Optionally enable user PATH integration in Settings and open a new terminal. `php -v` then uses the manager's executable launcher, including when the tray application is closed.
+5. Start the environment. Mailpit uses loopback SMTP **39327** and HTTP **8025**. PHP FastCGI ports are allocated separately for each minor channel, below Windows' default dynamic range (`49152–65535`). Managed services use loopback listeners and report unavailable ports.
+6. Select a default PHP channel. In a Store build, manage the `php.exe` alias through Settings > Manage command alias. For an unpackaged build, optionally enable user PATH integration in Settings. Open a new terminal; `php -v` uses the selected version, including when the tray application is closed. Another PHP installation earlier in PATH can take precedence.
 7. Use **Extensions** on a PHP runtime to search bundled modules and enable or disable them. Built-in modules are read-only. Conflicting user/stock INI directives are reported with source locations. A running channel and its dependent Nginx workers are drained/restarted for the change; stopped channels remain stopped.
 
 Each site's PHP selector changes that site's channel independently of the CLI default.
@@ -84,11 +84,11 @@ Stopping a PHP runtime manually leaves dependent sites unavailable until you sta
 - Site-file include directives accept absolute paths and masks; nested files use normal Nginx include syntax. See [include behavior and examples](docs/NGINX-INCLUDES.md). The managed root remains marker-based. Direct site hostname/root/listen fields must agree with metadata; direct competing FastCGI blocks are rejected. Nested files are validated by Nginx and remain user-owned/live rather than snapshotted.
 - Site changes currently use a validated stop/start of Nginx. Graceful reload, generation-specific HTTP confirmation, and durable crash-recovery journals remain future work.
 - Mail supports actual plain-text message inspection and local subject/sender filtering of the loaded inbox. HTML preview, attachment handling, server-side search, deletion, and retention UI are pending. No browser renderer is loaded.
-- No installer, startup-with-Windows UI, data-directory migration, settings editor for ports, or automatic restart policy is included yet.
+- Store submission and installed-package acceptance testing remain pending. Startup-with-Windows UI, data-directory migration, settings editor for ports, and automatic restart policy are not implemented.
 - FastCGI monitoring confirms the owned protocol responder. Dedicated opt-in integration now also verifies actual PHP script execution, per-site routing, extension toggles, SMTP capture, persistent messages, request draining, and independent CLI lifetime. The tested versions are recorded in [REAL-INTEGRATION.md](docs/REAL-INTEGRATION.md); this does not establish compatibility with every upstream release.
 - The ordinary offline checks use real Windows process/protocol fixtures and simulated binaries for configuration cases. The separate upstream test downloads verified actual distributions into an isolated profile and never changes user PATH or hosts.
 - Native-menu interaction, full keyboard/screen-reader flows, Explorer restart, and mixed-DPI/multi-monitor behavior require interactive acceptance testing. Memory and the 200 ms popup target have not been benchmarked.
-- Logging currently uses a bounded native process-output stream and structured JSON application files through BCL code. Microsoft.Extensions logging/DI integration, retention, and installer hardening are later foundation refinements.
+- Logging currently uses a bounded native process-output stream and structured JSON application files through BCL code. Microsoft.Extensions logging/DI integration and retention are later foundation refinements.
 
 ## Build and verify
 
@@ -106,6 +106,8 @@ An explicit SDK executable is also supported:
 ```
 
 The first command builds Release and runs the process/configuration checks plus WPF control-resource regression checks. Publishing creates the complete Windows app under `artifacts/releases/0.7.0/` and deploys the independent PHP launcher under `artifacts/releases/0.7.0/cli/`.
+
+With the Windows SDK installed, `scripts/build-store-package.ps1 -DevelopmentIdentity` packages that output into a test MSIX under `artifacts/store/`. Store submission requires the exact Partner Center identity; see [release instructions](docs/RELEASING.md).
 
 For a rendered popup smoke test without touching the ordinary application profile:
 

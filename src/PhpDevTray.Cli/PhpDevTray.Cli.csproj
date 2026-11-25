@@ -5,4 +5,7 @@
     <RootNamespace>PhpDevTray.Cli</RootNamespace>
     <UseAppHost>true</UseAppHost>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../PhpDevTray.Core/PhpDevTray.Core.csproj" />
+  </ItemGroup>
 </Project>
