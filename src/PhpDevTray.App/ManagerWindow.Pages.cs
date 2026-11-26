@@ -219,7 +219,7 @@ internal sealed partial class ManagerWindow
         _logOutput = new LogViewer(); panel.Children.Add(_logOutput); _activityVersion = -1;
         _logOutput.LinkRequested += async (_, uri) =>
         {
-            try { await OpenPathAsync(uri.AbsoluteUri); }
+            try { await OpenPathAsync(uri.IsFile ? uri.LocalPath : uri.AbsoluteUri); }
             catch (Exception exception) { ShowError(exception.Message); }
         };
         _logOutput.SearchRequested += (_, _) => { _activitySearch.Focus(); _activitySearch.SelectAll(); };

@@ -50,6 +50,7 @@ internal sealed partial class LogViewer : TextEditor
         // AvalonEdit owns matching and highlighting; the page owns the persistent search input.
         _search.Visibility = Visibility.Collapsed;
         TextArea.TextView.LineTransformers.Add(new LogColors(this));
+        TextArea.TextView.ElementGenerators.Add(new FilePathLinkGenerator());
         TextArea.SelectionChanged += (_, _) => { if (!_applying && SelectionLength == 0) UpdateEntries(_latest); };
     }
     public string? ServiceFilter

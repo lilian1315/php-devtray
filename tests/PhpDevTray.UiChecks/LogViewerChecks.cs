@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Navigation;
 using System.Windows.Threading;
+using ICSharpCode.AvalonEdit.Rendering;
 using PhpDevTray.App;
 using PhpDevTray.Core;
 
@@ -13,6 +14,7 @@ internal static class LogViewerChecks
     {
         CheckLocalizedTimestamps();
         CheckLinkNavigation();
+        CheckFileLinks();
         var buffer = new ActivityBuffer();
         buffer.Append("php", "first line"); buffer.Append("caddy", "second line");
         var viewer = new LogViewer(); viewer.UpdateEntries(buffer.Snapshot);
@@ -63,6 +65,35 @@ internal static class LogViewerChecks
             Console.WriteLine("PASS: Activity links do not navigate away from the application page.");
         }
         finally { window.Close(); }
+    }
+    private static void CheckFileLinks()
+    {
+        const string caddyfile = @"C:\Users\lmoulanier\AppData\Local\PhpDevTray\data\state\caddy\franken-v1-13-6\Caddyfile";
+        foreach (var (text, expected) in new[]
+        {
+            ("Configuration: " + caddyfile, caddyfile),
+            ("file=\"" + caddyfile.Replace(@"\", @"\\") + "\"", caddyfile),
+            ("Open \"C:\\My projects\\site #1\\Caddyfile\" now", @"C:\My projects\site #1\Caddyfile"),
+            ("Open 'C:\\My projects\\Caddyfile' now", @"C:\My projects\Caddyfile"),
+            (@"Config (C:\config\Caddyfile), retry", @"C:\config\Caddyfile"),
+            (@"Config C:/config/php.ini.", @"C:\config\php.ini"),
+            (@"Config \\server\share\Caddyfile", @"\\server\share\Caddyfile"),
+            (@"Config C:\config\missing.ini", @"C:\config\missing.ini")
+        })
+        {
+            var viewer = new LogViewer { Text = text };
+            viewer.Measure(new Size(1000, 100)); viewer.Arrange(new Rect(0, 0, 1000, 100)); viewer.UpdateLayout();
+            var line = viewer.TextArea.TextView.GetOrConstructVisualLine(viewer.Document.GetLineByNumber(1));
+            var link = line.Elements.OfType<VisualLineLinkText>().Single();
+            Require(link.NavigateUri.IsFile && link.NavigateUri.LocalPath == expected, $"File link must preserve the Windows path: {text}");
+            Require(link.RequireControlModifierForClick, "File links must preserve Ctrl+click text selection behavior.");
+            Require(viewer.Text == text, "Recognizing a file link must not rewrite log text.");
+        }
+        var ordinary = new LogViewer { Text = @"relative\file.ini and https://localhost/C:/config/file.ini" };
+        ordinary.Measure(new Size(1000, 100)); ordinary.Arrange(new Rect(0, 0, 1000, 100)); ordinary.UpdateLayout();
+        var links = ordinary.TextArea.TextView.GetOrConstructVisualLine(ordinary.Document.GetLineByNumber(1)).Elements.OfType<VisualLineLinkText>().ToArray();
+        Require(links.Length == 1 && links[0].NavigateUri.Scheme == "https", "File recognition must preserve web links and ignore relative paths.");
+        Console.WriteLine("PASS: Windows file links, JSON-escaped paths, quoted spaces, UNC paths and unchanged web links.");
     }
     private static void CheckLocalizedTimestamps()
     {
