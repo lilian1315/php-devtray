@@ -206,11 +206,15 @@ internal sealed partial class ManagerWindow : Wpf.Ui.Controls.FluentWindow
         var executable = kind switch { ServiceKind.Php => "php.exe", ServiceKind.Caddy => "caddy.exe", ServiceKind.FrankenPhp => "frankenphp.exe", _ => "mailpit.exe" };
         var picker = new OpenFileDialog { Title = $"Select {executable} from an extracted distribution", Filter = $"{executable}|{executable}|Executables|*.exe", CheckFileExists = true, Multiselect = false };
         if (picker.ShowDialog(this) != true) return;
-        await RunAsync($"Validating {kind} runtime…", () => kind switch
+        await RunAsync($"Validating {kind} runtime…", async () =>
         {
-            ServiceKind.Caddy or ServiceKind.FrankenPhp => _manager.RegisterWebRuntimeAsync(kind, picker.FileName),
-            ServiceKind.Php => _manager.RegisterPhpAsync(picker.FileName),
-            _ => _manager.RegisterMailpitAsync(picker.FileName),
+            await (kind switch
+            {
+                ServiceKind.Caddy or ServiceKind.FrankenPhp => _manager.RegisterWebRuntimeAsync(kind, picker.FileName),
+                ServiceKind.Php => _manager.RegisterPhpAsync(picker.FileName),
+                _ => _manager.RegisterMailpitAsync(picker.FileName),
+            });
+            _notifications.Publish("Runtime imported", $"{kind} runtime imported successfully.", NotificationSeverity.Success);
         });
     }
 
@@ -291,6 +295,7 @@ internal sealed partial class ManagerWindow : Wpf.Ui.Controls.FluentWindow
                 if (restart)
                 {
                     _installProgress = new("Restart Windows to finish Visual C++ setup, then retry PHP installation.");
+                    _notifications.Publish("Restart required", _installProgress.Phase, NotificationSeverity.Warning);
                     return;
                 }
                 installVisualCpp = false;
@@ -298,6 +303,7 @@ internal sealed partial class ManagerWindow : Wpf.Ui.Controls.FluentWindow
             }
             await _manager.InstallReleaseAsync(release.Id, progress, cancellation.Token);
             _installProgress = new RuntimeInstallProgress($"Installed {release.DisplayName}", _installProgress?.BytesReceived ?? 0, _installProgress?.TotalBytes);
+            _notifications.Publish("Installation complete", $"Installed {release.DisplayName}.", NotificationSeverity.Success);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         { throw; }
@@ -339,6 +345,7 @@ internal sealed partial class ManagerWindow : Wpf.Ui.Controls.FluentWindow
     {
         _installProgress = null;
         await _manager.ActivatePhpVersionAsync(version.Channel, version.Version, _lifetime.Token);
+        _notifications.Publish("PHP version changed", $"PHP {version.Channel} now uses {version.Version}.", NotificationSeverity.Success);
     });
 
     private string InstallActionLabel(RuntimeRelease release) => InstalledPhpFor(release)?.Version == PhpPatch(release.Version) ? "Already active"
@@ -465,9 +472,9 @@ internal sealed partial class ManagerWindow : Wpf.Ui.Controls.FluentWindow
         if (_operation is not null || _shutdown) return;
         _operation = label;
         Render(_manager.Snapshot);
-        using var operation = _operationTracker.Begin(label);
+        using var operation = _operationTracker.Begin(label, quiet: true);
         _foregroundOperation = operation;
-        try { await action(); operation.Complete(); _notifications.Publish("Completed", label, NotificationSeverity.Success); }
+        try { await action(); operation.Complete(); }
         catch (OperationCanceledException) { operation.Fail(new OperationCanceledException()); }
         catch (Exception exception) { operation.Fail(exception); ShowError(exception.Message); }
         finally { _foregroundOperation = null; _operation = null; Render(_manager.Snapshot); }

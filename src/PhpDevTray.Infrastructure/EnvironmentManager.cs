@@ -250,7 +250,9 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
         [System.Runtime.CompilerServices.CallerMemberName] string operationName = "")
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        using var operation = Operations.Begin(OperationName(operationName), quiet: operationName is "InitializeAsync" or "RefreshAsync" or "SetLastSectionAsync" or "SetThemeAsync");
+        using var operation = Operations.Begin(OperationName(operationName), quiet: operationName is not
+            (nameof(InstallReleaseAsync) or nameof(RegisterPhpAsync) or nameof(RegisterMailpitAsync) or nameof(RegisterWebRuntimeAsync)
+            or nameof(ActivatePhpVersionAsync) or nameof(ApplyPhpExtensionChangesAsync)));
         try { await _operations.WaitAsync(cancellationToken); }
         catch (Exception error) { operation.Fail(error); throw; }
         try

@@ -49,10 +49,13 @@ internal static class ApplicationChecks
                 "Appearance must be applied in snapshots and persist without touching runtime/CLI state.");
             await manager.StopAllAsync();
             Check(supervisor.StopAllCalls == 1, "Stop All must delegate the bounded, dependency-ordered supervisor shutdown.");
+            Check(manager.Notifications.History.Count == 0, "Routine initialization, service and appearance changes must not produce success notifications.");
             var failed = false;
             try { await manager.SetDefaultPhpAsync("9.9"); }
             catch (InvalidOperationException) { failed = true; }
             Check(failed && manager.Snapshot.LastError is not null, "Invalid default must fail with actionable state.");
+            Check(manager.Notifications.History.Count == 1 && manager.Notifications.History[0].Severity == NotificationSeverity.Error,
+                "Routine operations must still notify on failure.");
             Console.WriteLine("PASS: coordinator respects explicit startup, ordered shutdown, and invalid-default errors.");
         }
         finally

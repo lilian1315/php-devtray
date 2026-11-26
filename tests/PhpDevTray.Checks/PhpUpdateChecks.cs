@@ -28,7 +28,10 @@ internal static class PhpUpdateChecks
         await using var fixture = await Fixture.CreateAsync();
         var source = await fixture.DistributionAsync("8.4.19");
         var original = fixture.Manager.Snapshot.PhpInstallations.Single(php => php.Channel == "8.4");
+        var notifications = fixture.Manager.Notifications.History.Count;
         await fixture.Manager.RegisterPhpAsync(Path.Combine(source, "php.exe"));
+        Check(fixture.Manager.Notifications.History.Count == notifications + 1 && fixture.Manager.Notifications.History[0].Severity == NotificationSeverity.Success,
+            "A completed runtime import/update must produce one useful success notification.");
         var updated = fixture.Manager.Snapshot.PhpInstallations.Single(php => php.Channel == "8.4");
         Check(fixture.Supervisor.Events.Count == 0, "Updating a stopped channel must not start or stop any service.");
         fixture.CheckPolicy(updated, "8.4.19");

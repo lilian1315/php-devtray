@@ -30,10 +30,12 @@ internal static class StartupChecks
             Require(registration.Changes.SequenceEqual([true]) && checkbox.IsChecked == true, "Enabling startup must update Windows registration and read back the resulting state.");
             Click(checkbox, false);
             Require(registration.Changes.SequenceEqual([true, false]) && checkbox.IsChecked == false, "Disabling startup must remove automatic launch.");
+            Require(window.NotificationHistory.Count == 0, "Routine settings changes must not produce success notifications.");
             registration.Failure = new IOException("Startup registration denied");
             Click(checkbox, true);
             Require(checkbox.IsChecked == false && window.NotificationHistory.Any(message => message.Message == "Startup registration denied"),
                 "A failed registration must restore the previous checkbox state and show the error.");
+            Require(window.NotificationHistory.Count == 1, "An operation failure must produce one notification, without a duplicate from its UI wrapper.");
             registration.Failure = null;
             registration.State = new(false, "Enable PHP DevTray in Windows Startup settings.");
             window.PrepareSmokeSectionAsync("Sites").GetAwaiter().GetResult();
