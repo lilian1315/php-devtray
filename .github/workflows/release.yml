@@ -97,6 +97,10 @@ jobs:
               throw "Automatic submission was requested but $name is missing from the store environment. See docs/RELEASING.md."
             }
           }
+          $sellerId = 0
+          if (-not [int]::TryParse($env:PARTNER_CENTER_SELLER_ID.Trim(), [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref]$sellerId) -or $sellerId -le 0) {
+            throw 'PARTNER_CENTER_SELLER_ID must be the numeric Seller ID from Partner Center > Account settings > Organization profile > Legal info (or Identifiers). Use digits only, within 1..2147483647. This is not the publisher GUID/CN, Store product ID, tenant ID, or client ID. Update the secret in the GitHub store environment; do not paste it into logs.'
+          }
           'enabled=true' >> $env:GITHUB_OUTPUT
       - name: Install Microsoft Store Developer CLI
         if: steps.store_config.outputs.enabled == 'true'
@@ -116,7 +120,7 @@ jobs:
         run: |
           $packages = @(Get-ChildItem -LiteralPath artifacts/store -Filter '*.msix' -File)
           if ($packages.Count -ne 1) { throw 'Expected exactly one Store MSIX package.' }
-          & msstore reconfigure --tenantId $env:PARTNER_CENTER_TENANT_ID --sellerId $env:PARTNER_CENTER_SELLER_ID --clientId $env:PARTNER_CENTER_CLIENT_ID --clientSecret $env:PARTNER_CENTER_CLIENT_SECRET
+          & msstore reconfigure --tenantId $env:PARTNER_CENTER_TENANT_ID --sellerId $env:PARTNER_CENTER_SELLER_ID.Trim() --clientId $env:PARTNER_CENTER_CLIENT_ID --clientSecret $env:PARTNER_CENTER_CLIENT_SECRET
           if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store authentication configuration failed.' }
           $arguments = @('publish', $packages[0].FullName, '--appId', $env:STORE_PRODUCT_ID)
           if (-not [string]::IsNullOrWhiteSpace($env:STORE_FLIGHT_ID)) { $arguments += @('--flightId', $env:STORE_FLIGHT_ID) }

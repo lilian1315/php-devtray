@@ -25,7 +25,7 @@ Add these **secrets** to the GitHub **store** environment (do not put their valu
 | Secret | Value |
 | --- | --- |
 | `PARTNER_CENTER_TENANT_ID` | Microsoft Entra tenant ID associated with Partner Center |
-| `PARTNER_CENTER_SELLER_ID` | Partner Center seller/publisher account ID |
+| `PARTNER_CENTER_SELLER_ID` | Numeric **Seller ID** from Partner Center > Account settings > Organization profile > Legal info, or Identifiers > Publisher. Copy digits only (for example `12345678`); not the publisher GUID/`CN=...`, Store product ID, tenant ID, or client ID. The CLI requires a positive 32-bit integer. |
 | `PARTNER_CENTER_CLIENT_ID` | Entra application/client ID with Partner Center access |
 | `PARTNER_CENTER_CLIENT_SECRET` | That application's client secret; renew it before it expires |
 
@@ -38,6 +38,8 @@ Add these **environment variables**:
 | `STORE_FLIGHT_ID` | Optional existing package-flight ID; leave unset to use the app's existing Store audience |
 
 The workflow pins the Microsoft publisher action and CLI version, preserves the app's existing pricing, submits the one freshly built MSIX, and clears CLI credentials from the runner afterwards. A shared concurrency group serializes releases so two tags cannot submit simultaneously. Missing required configuration fails an explicitly requested submission after preserving the downloadable package artifact.
+
+If the CLI fails in `RetrieveSellerId` with `System.FormatException`, correct `PARTNER_CENTER_SELLER_ID` in the GitHub **store** environment. GitHub replaces secret values with `***` in logs; that masking does not mean the CLI received literal asterisks. The workflow validates the numeric format before invoking the CLI. Run **Release to Microsoft Store** from `main` with the original tag and **publish** checked to retry with the corrected workflow; rerunning an old failed job uses its original workflow revision.
 
 Manual runs have a **publish** checkbox, defaulting to **false**. Checking it submits that tag once, even if `STORE_AUTOPUBLISH` is disabled; leaving it unchecked remains package-only even when tag auto-publishing is enabled. Select the workflow from `main` to use the newest automation with an existing source tag. Do not resubmit an already released Store package version; bump `StorePackageVersion` and create a new matching app-version tag for updates.
 
