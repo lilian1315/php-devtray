@@ -53,8 +53,8 @@ Successful CLI submission means the package has been submitted for Microsoft pro
 
 `Directory.Build.props` contains two related versions:
 
-- `Version` and `InformationalVersion` describe the app, currently `0.8.0` / `0.8.0-preview`. The Git tag must match `v` plus `InformationalVersion` without build metadata: currently `v0.8.0-preview`.
-- `StorePackageVersion` is the four-part numeric MSIX identity version, currently `1.0.1.0`. Its first part must be nonzero; its fourth part must stay `0` for Store use. Increment this version for each new package version sent to the Store, including previews. The Store version does not mean the app has reached feature version 1.0.
+- `Version` and `InformationalVersion` describe the app, currently `0.8.1` / `0.8.1-preview`. The Git tag must match `v` plus `InformationalVersion` without build metadata: currently `v0.8.1-preview`.
+- `StorePackageVersion` is the four-part numeric MSIX identity version, currently `1.0.2.0`. Its first part must be nonzero; its fourth part must stay `0` for Store use. Increment this version for each new package version sent to the Store, including previews. The Store version does not mean the app has reached feature version 1.0.
 
 Preview suffixes cannot be encoded in an MSIX identity version. Use a private audience/package flight in Partner Center to test a preview before public availability; a `-preview` Git tag by itself does not create a private Store release. When automatic submission is enabled, configure `STORE_FLIGHT_ID` for an existing flight if that is the intended preview destination.
 

@@ -6,8 +6,8 @@
     <LangVersion>latest</LangVersion>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AnalysisLevel>latest</AnalysisLevel>
-    <Version>0.8.0</Version>
-    <InformationalVersion>0.8.0-preview</InformationalVersion>
-    <StorePackageVersion>1.0.1.0</StorePackageVersion>
+    <Version>0.8.1</Version>
+    <InformationalVersion>0.8.1-preview</InformationalVersion>
+    <StorePackageVersion>1.0.2.0</StorePackageVersion>
   </PropertyGroup>
 </Project>
