@@ -33,13 +33,15 @@ Add these **environment variables**:
 
 | Variable | Value |
 | --- | --- |
-| `STORE_PRODUCT_ID` | Store product ID from Partner Center, such as `9N…`; this is not the MSIX package name or publisher GUID |
+| `STORE_PRODUCT_ID` | PHP DevTray's public Store product ID: `9PN0LRQ4PG5Z`. Verify it in Partner Center > Product management > Product identity. This is not the MSIX package name, publisher GUID, or Entra application/client ID. |
 | `STORE_AUTOPUBLISH` | `true` to submit every matching release-tag push automatically; otherwise tags only build the artifact |
 | `STORE_FLIGHT_ID` | Optional existing package-flight ID; leave unset to use the app's existing Store audience |
 
 The workflow pins the Microsoft publisher action and CLI version, preserves the app's existing pricing, submits the one freshly built MSIX, and clears CLI credentials from the runner afterwards. A shared concurrency group serializes releases so two tags cannot submit simultaneously. Missing required configuration fails an explicitly requested submission after preserving the downloadable package artifact.
 
 If the CLI fails in `RetrieveSellerId` with `System.FormatException`, correct `PARTNER_CENTER_SELLER_ID` in the GitHub **store** environment. GitHub replaces secret values with `***` in logs; that masking does not mean the CLI received literal asterisks. The workflow validates the numeric format before invoking the CLI. Run **Release to Microsoft Store** from `main` with the original tag and **publish** checked to retry with the corrected workflow; rerunning an old failed job uses its original workflow revision.
+
+If the CLI reports **Could not retrieve your application**, the message does not distinguish an incorrect product ID from authentication, authorization, or service failures. The workflow first performs a read-only `msstore apps get`, then lists accessible apps if lookup fails, before attempting any upload. Confirm `STORE_PRODUCT_ID=9PN0LRQ4PG5Z` in the GitHub **store** environment. If PHP DevTray is not listed, verify that the Entra application matching `PARTNER_CENTER_CLIENT_ID` is added under Partner Center > Account settings > User management > Microsoft Entra applications, has the **Manager** role and access to PHP DevTray, and belongs to the configured tenant associated with the Store developer account. Also verify the secret is the client secret **value**, not its identifier, and has not expired. A successful `msstore reconfigure` saves configuration; it does not establish that these credentials can retrieve this app. If listing itself fails, inspect its authentication/API error rather than assuming the product ID is wrong.
 
 Manual runs have a **publish** checkbox, defaulting to **false**. Checking it submits that tag once, even if `STORE_AUTOPUBLISH` is disabled; leaving it unchecked remains package-only even when tag auto-publishing is enabled. Select the workflow from `main` to use the newest automation with an existing source tag. Do not resubmit an already released Store package version; bump `StorePackageVersion` and create a new matching app-version tag for updates.
 

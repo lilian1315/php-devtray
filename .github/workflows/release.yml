@@ -122,7 +122,14 @@ jobs:
           if ($packages.Count -ne 1) { throw 'Expected exactly one Store MSIX package.' }
           & msstore reconfigure --tenantId $env:PARTNER_CENTER_TENANT_ID --sellerId $env:PARTNER_CENTER_SELLER_ID.Trim() --clientId $env:PARTNER_CENTER_CLIENT_ID --clientSecret $env:PARTNER_CENTER_CLIENT_SECRET
           if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store authentication configuration failed.' }
-          $arguments = @('publish', $packages[0].FullName, '--appId', $env:STORE_PRODUCT_ID)
+          $productId = $env:STORE_PRODUCT_ID.Trim()
+          & msstore apps get $productId > $null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output 'Application lookup failed. Listing applications accessible to this Entra application (read-only):'
+            & msstore apps list
+            throw 'Store application lookup failed before any package upload. Verify STORE_PRODUCT_ID against the Partner Center product identity. If the app is missing from the list, check that the configured tenant/client application is added in Partner Center User management > Microsoft Entra applications with the Manager role and access to this product. Saving CLI credentials does not verify API access. See docs/RELEASING.md.'
+          }
+          $arguments = @('publish', $packages[0].FullName, '--appId', $productId)
           if (-not [string]::IsNullOrWhiteSpace($env:STORE_FLIGHT_ID)) { $arguments += @('--flightId', $env:STORE_FLIGHT_ID) }
           & msstore @arguments
           if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store submission failed. Check the CLI output and Partner Center.' }
