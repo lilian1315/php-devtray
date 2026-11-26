@@ -107,6 +107,7 @@ internal sealed class ThemeManager : IDisposable
             ["SurfaceBrush"] = "NavigationViewContentBackground", ["CardBrush"] = "CardBackground",
             ["SidebarBrush"] = "ApplicationBackgroundBrush", ["TextBrush"] = "TextFillColorPrimaryBrush",
             ["MutedBrush"] = "TextFillColorSecondaryBrush", ["BorderBrush"] = "CardBorderBrush",
+            ["LinkBrush"] = "AccentTextFillColorPrimaryBrush",
             ["InputBorderBrush"] = "ControlStrongStrokeColorDefaultBrush", ["DividerBrush"] = "DividerStrokeColorDefaultBrush",
             ["HoverBrush"] = "SubtleFillColorSecondaryBrush", ["PressedBrush"] = "SubtleFillColorTertiaryBrush",
             ["HoverBorderBrush"] = "ControlStrongStrokeColorDefaultBrush", ["AccentBrush"] = "AccentFillColorDefaultBrush",
@@ -143,6 +144,7 @@ internal sealed class ThemeManager : IDisposable
     private static void ApplyHighContrast(ResourceDictionary resources)
     {
         resources["LogSelectionBrush"] = SystemColors.WindowBrush;
+        resources["LinkBrush"] = SystemColors.HotTrackBrush;
         resources["ListBoxItemSelectedBackgroundThemeBrush"] = SystemColors.HighlightBrush;
         resources["ListBoxItemSelectedForegroundThemeBrush"] = SystemColors.HighlightTextBrush;
         foreach (var name in new[] { "SurfaceBrush", "CardBrush", "SidebarBrush", "DisabledSurfaceBrush", "HoverBrush", "PressedBrush", "AccentSoftBrush" }) resources[name] = SystemColors.WindowBrush;

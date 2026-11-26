@@ -38,6 +38,7 @@ internal sealed partial class LogViewer : TextEditor
         HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto;
         VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto;
         SetResourceReference(BackgroundProperty, "CardBrush"); SetResourceReference(ForegroundProperty, "TextBrush");
+        TextArea.TextView.SetResourceReference(TextView.LinkTextForegroundBrushProperty, "LinkBrush");
         AutomationProperties.SetName(this, "Recent application log");
         // Keep external links out of the containing page's WPF navigation frame.
         AddHandler(Hyperlink.RequestNavigateEvent, new RequestNavigateEventHandler((_, args) =>

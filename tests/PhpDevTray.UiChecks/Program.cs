@@ -28,6 +28,12 @@ internal static class Program
             var preference = themeType.GetMethod("SetPreference")!;
             void SetTheme(ThemePreference value) => preference.Invoke(theme, [value]);
             SetTheme(ThemePreference.Light);
+            var logViewer = new LogViewer();
+            var linkWindow = new Window { Content = logViewer, Width = 700, Height = 300, Left = -20000, Top = -20000, ShowActivated = false, ShowInTaskbar = false };
+            linkWindow.Show();
+            void CheckLogLinkBrush() => Require(ReferenceEquals(logViewer.TextArea.TextView.LinkTextForegroundBrush, app.Resources["LinkBrush"]),
+                "Activity links must follow theme changes on the existing viewer.");
+            CheckLogLinkBrush();
             PhpDevTray.UiChecks.AppIconChecks.Run();
             var lightBrush = app.Resources["CardBrush"];
             SetTheme(ThemePreference.Light);
@@ -35,7 +41,9 @@ internal static class Program
             CheckContrast(app.Resources);
             SetTheme(ThemePreference.Dark);
             CheckContrast(app.Resources);
+            CheckLogLinkBrush();
             SetTheme(ThemePreference.Light);
+            CheckLogLinkBrush();
             Require(ReferenceEquals(lightBrush, app.Resources["CardBrush"]), "Light palette brush instances must be cached across switches.");
 
             foreach (var icon in Enum.GetValues<AppIcon>()) _ = UiIcon.Create(icon);
@@ -116,7 +124,10 @@ internal static class Program
             Require(AutomationProperties.GetName(DialogUi.ActionButton("Browse folders…", "SecondaryButtonStyle", AppIcon.Folder)) == "Browse folders…", "Dialog buttons with composed icon content need an explicit accessible name.");
             themeType.GetMethod("ApplyHighContrast", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [app.Resources]);
             Require(ReferenceEquals(app.Resources["TextBrush"], SystemColors.WindowTextBrush), "High contrast must use native system text colors.");
+            Require(ReferenceEquals(app.Resources["LinkBrush"], SystemColors.HotTrackBrush), "High contrast links must use the native system hyperlink color.");
+            CheckLogLinkBrush();
             Require(ReferenceEquals(app.Resources["SelectedTextBrush"], SystemColors.HighlightTextBrush), "High contrast selections must use native highlight text colors.");
+            linkWindow.Close();
             Require(app.Resources["PopupShadowEffect"] is null, "High contrast must remove decorative popup shadows.");
             Console.WriteLine("PASS: WPF design resources, cached theme switching, palette contrast, all vector geometries, inherited icon colors.");
             Console.WriteLine("PASS: WPF UI text/selection/toggle patterns, dropdowns, 40px controls and stable disabled geometry.");
@@ -137,11 +148,12 @@ internal static class Program
     }
     private static void CheckContrast(ResourceDictionary resources)
     {
-        foreach (var pair in new[] { ("TextBrush", "CardBrush"), ("MutedBrush", "CardBrush"), ("MutedBrush", "SidebarBrush"), ("MutedBrush", "HoverBrush"), ("MutedBrush", "PressedBrush"), ("AccentTextBrush", "AccentBrush"), ("SelectedTextBrush", "SelectionBrush") })
+        foreach (var pair in new[] { ("TextBrush", "CardBrush"), ("LinkBrush", "CardBrush"), ("MutedBrush", "CardBrush"), ("MutedBrush", "SidebarBrush"), ("MutedBrush", "HoverBrush"), ("MutedBrush", "PressedBrush"), ("AccentTextBrush", "AccentBrush"), ("SelectedTextBrush", "SelectionBrush") })
         {
             var a = Luminance(((SolidColorBrush)resources[pair.Item1]).Color);
             var b = Luminance(((SolidColorBrush)resources[pair.Item2]).Color);
             var ratio = (Math.Max(a, b) + .05) / (Math.Min(a, b) + .05);
+            if (pair.Item1 == "LinkBrush") Console.WriteLine($"Activity link contrast: {ratio:0.00}:1.");
             Require(ratio >= 4.5, $"Text palette {pair.Item1}/{pair.Item2} has insufficient contrast ({ratio:0.00}).");
         }
     }
