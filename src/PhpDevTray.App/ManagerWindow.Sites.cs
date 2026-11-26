@@ -1,3 +1,4 @@
+using Button = Wpf.Ui.Controls.Button;
 using System.IO;
 using System.Windows;
 using System.Windows.Automation;
@@ -11,109 +12,83 @@ namespace PhpDevTray.App;
 
 internal sealed partial class ManagerWindow
 {
-    private sealed record SiteRow(WebSite Site, TextBlock Status, Ellipse Indicator, TextBlock Detail, Button Activation);
+    private sealed record SiteRow(TextBlock Status, TextBlock Root, ComboBox Picker, Button Activation);
     private readonly Dictionary<string, SiteRow> _siteRows = new(StringComparer.OrdinalIgnoreCase);
-    private UIElement? _sitesStartNotice;
+    private Button? _siteServerControl;
     private (string Hostname, string Label)? _siteActivation;
+    private WebSite CurrentSite(string hostname) => _snapshot.Sites.Single(site => site.Hostname == hostname);
 
     private void BuildSites()
     {
-        Heading("Sites", "Activation changes apply immediately while Caddy is running.");
-        var runtimes = _snapshot.Services.Where(s => s.Kind is ServiceKind.FrankenPhp or ServiceKind.Php && s.Status != ServiceStatus.NotInstalled).ToArray();
-        _pageActions.Children.Add(ActionButton("Add site", () => CreateSiteAsync(runtimes), "PrimaryButtonStyle", AppIcon.Plus,
-            enabled: () => !Busy && runtimes.Length > 0));
+        Heading("Sites", "Local hostnames, folders and PHP engines.");
+        var runtimes = _snapshot.Services.Where(service => service.Kind is ServiceKind.FrankenPhp or ServiceKind.Php && service.Status != ServiceStatus.NotInstalled).ToArray();
+        _pageActions.Children.Add(ActionButton("Add site", () => CreateSiteAsync(runtimes), "PrimaryButtonStyle", AppIcon.Plus, enabled: () => !Busy && runtimes.Length > 0));
+        _siteServerControl = ActionButton("Start Caddy", () => ToggleServiceAsync(ServiceKind.Caddy), enabled: () => !Busy && HasRuntime(ServiceKind.Caddy) && (ServiceIsRunning("caddy") || _snapshot.Sites.Any(site => site.Enabled)));
+        _pageActions.Children.Add(_siteServerControl);
+        _pageActions.Children.Add(RestartButton(() => RestartServiceAsync("caddy", "Caddy"), () => ServiceIsRunning("caddy"), "Restart Caddy"));
         var rows = new StackPanel();
-        if (runtimes.Length == 0)
-            rows.Children.Add(InlineNotice("Install FrankenPHP or PHP NTS to add your first site.", "Install runtimes", () => OpenInstallAsync(ServiceKind.FrankenPhp)));
-        _sitesStartNotice = null;
-        if (!HasRuntime(ServiceKind.Caddy))
-            rows.Children.Add(InlineNotice("Caddy serves HTTPS for all sites.", "Install Caddy", () => OpenInstallAsync(ServiceKind.Caddy)));
-        else if (_snapshot.Sites.Any(site => site.Enabled))
+        if (runtimes.Length == 0) rows.Children.Add(InlineNotice("Install PHP to add your first site.", "Install PHP", () => OpenInstallAsync(ServiceKind.Php)));
+        if (!HasRuntime(ServiceKind.Caddy)) rows.Children.Add(InlineNotice("Caddy serves HTTPS for all sites.", "Install Caddy", () => OpenInstallAsync(ServiceKind.Caddy)));
+        foreach (var site in _snapshot.Sites.OrderBy(site => site.Hostname))
         {
-            _sitesStartNotice = InlineNotice("Start Caddy to serve your enabled sites.", "Start Caddy",
-                () => RunAsync("Starting Caddy…", () => _manager.StartServiceAsync("caddy", _lifetime.Token)));
-            rows.Children.Add(_sitesStartNotice);
-        }
-        if (_snapshot.Sites.Count == 0 && runtimes.Length > 0 && HasRuntime(ServiceKind.Caddy))
-            rows.Children.Add(InlineNotice("Add a site to connect a local hostname to a folder and a PHP runtime."));
-        foreach (var site in _snapshot.Sites.OrderBy(s => s.Hostname))
-        {
-            var documentRoot = _snapshot.SiteRoots.GetValueOrDefault(site.Hostname);
-            var row = new StackPanel();
-            var header = new DockPanel();
-            var actions = MoreButton($"{site.Hostname} actions", () => [
-                Menu("Rename hostname…", () => RenameSiteAsync(site), !Busy),
-                Menu("Edit Caddyfile", () => OpenEditorAsync(Path.Combine(_snapshot.DataDirectory, "user", "caddy", "sites", site.CaddyfileName))),
-                Menu("Open site", () => OpenPathAsync("https://" + site.Hostname), SiteIsServing(site)),
-                Menu("Open document root", () => OpenPathAsync(documentRoot!), documentRoot is not null)
-            ]);
-            DockPanel.SetDock(actions, Dock.Right);
-            header.Children.Add(actions);
-            var status = T("", 11, true);
-            AutomationProperties.SetLiveSetting(status, AutomationLiveSetting.Polite);
-            var indicator = new Ellipse { Width = 7, Height = 7, Margin = new Thickness(0, 0, 6, 0) };
-            var badgeContent = new StackPanel { Orientation = Orientation.Horizontal };
-            badgeContent.Children.Add(indicator);
-            badgeContent.Children.Add(status);
-            var badge = new Border { Child = badgeContent, Padding = new Thickness(8, 4, 8, 4), CornerRadius = new CornerRadius(6),
-                Margin = new Thickness(10, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
-            badge.SetResourceReference(Border.BackgroundProperty, "HoverBrush");
-            DockPanel.SetDock(badge, Dock.Right);
-            header.Children.Add(badge);
-            var hostname = T(site.Hostname, 15, true);
-            hostname.VerticalAlignment = VerticalAlignment.Center;
-            header.Children.Add(hostname);
-            row.Children.Add(header);
-            if (documentRoot is not null)
-                row.Children.Add(T(documentRoot, 12, muted: true, margin: new Thickness(0, 0, 0, 4)));
-            var detail = T("", 12, muted: true);
-            row.Children.Add(detail);
-            var controls = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
-            var picker = new ComboBox { ItemsSource = runtimes, DisplayMemberPath = nameof(ServiceSnapshot.DisplayName),
-                SelectedValuePath = nameof(ServiceSnapshot.Id), SelectedValue = site.RuntimeId,
-                MinWidth = 150, MaxWidth = 205, MinHeight = 40, Margin = new Thickness(0, 0, 8, 4) };
-            AutomationProperties.SetName(picker, $"PHP runtime for {site.Hostname}");
+            var host = site.Hostname;
+            var labels = new StackPanel(); labels.Children.Add(T(host, 16, true));
+            var root = RuntimeMetadata(""); root.MinHeight = 20; root.TextWrapping = TextWrapping.NoWrap; root.TextTrimming = TextTrimming.CharacterEllipsis; labels.Children.Add(root);
+            var status = RuntimeMetadata(""); status.MinHeight = 20; labels.Children.Add(status);
+            var controls = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
+            var picker = new ComboBox { ItemsSource = runtimes, DisplayMemberPath = nameof(ServiceSnapshot.DisplayName), SelectedValuePath = nameof(ServiceSnapshot.Id), SelectedValue = site.RuntimeId,
+                Width = 184, MinHeight = 32, Margin = new Thickness(0, 0, 8, 0) };
+            AutomationProperties.SetName(picker, $"PHP runtime for {host}");
             picker.SelectionChanged += async (_, _) =>
             {
-                if (picker.SelectedValue is not string id || id == site.RuntimeId) return;
-                picker.IsEnabled = false;
-                await RunAsync($"Switching {site.Hostname}…", () => _manager.SaveSiteAsync(site with { RuntimeId = id }, _lifetime.Token));
-                picker.SelectedValue = _snapshot.Sites.FirstOrDefault(s => s.Hostname == site.Hostname)?.RuntimeId;
-                picker.IsEnabled = true;
+                if (_updatingInputs || picker.SelectedValue is not string id || id == CurrentSite(host).RuntimeId) return;
+                await RunAsync($"Switching {host}…", () => _manager.SaveSiteAsync(CurrentSite(host) with { RuntimeId = id }, _lifetime.Token));
+                UpdateSiteStates();
             };
-            controls.Children.Add(picker);
-            var verb = site.Enabled ? "Disable" : "Enable";
-            var activation = ActionButton(verb + " site", () => ChangeSiteActivationAsync(site), "SecondaryButtonStyle",
-                site.Enabled ? AppIcon.Stop : AppIcon.Play, $"{verb} {site.Hostname}");
+            picker.Margin = new Thickness(0, 12, 0, 0); picker.HorizontalAlignment = HorizontalAlignment.Left;
+            labels.Children.Add(picker);
+            var activation = ActionButton("Disable site", () => ChangeSiteActivationAsync(CurrentSite(host)));
             controls.Children.Add(activation);
-            row.Children.Add(controls);
-            _siteRows.Add(site.Hostname, new(site, status, indicator, detail, activation));
-            rows.Children.Add(RowSurface(row));
+            controls.Children.Add(MoreButton(host + " actions", () => [
+                Menu("Rename hostname…", () => RenameSiteAsync(CurrentSite(host)), !Busy),
+                Menu("Edit Caddyfile", () => OpenEditorAsync(Path.Combine(_snapshot.DataDirectory, "user", "caddy", "sites", CurrentSite(host).CaddyfileName))),
+                Menu("Open site", () => OpenPathAsync("https://" + host), SiteIsServing(CurrentSite(host))),
+                Menu("Open document root", () => OpenPathAsync(_snapshot.SiteRoots[host]!), _snapshot.SiteRoots.GetValueOrDefault(host) is not null)
+            ]));
+            _siteRows[host] = new(status, root, picker, activation);
+            rows.Children.Add(RuntimeRow(labels, controls));
         }
         _contentHost.Children.Add(Scroll(rows));
     }
-
     private bool SiteIsServing(WebSite site) => site.Enabled && !Busy && ServiceIsRunning("caddy") && ServiceIsRunning(site.RuntimeId);
     private bool ServiceIsRunning(string id) => _snapshot.Services.Any(service => service.Id == id && service.Status == ServiceStatus.Running);
-
     private void UpdateSiteStates()
     {
         var caddyRunning = ServiceIsRunning("caddy");
-        if (_sitesStartNotice is not null)
-            _sitesStartNotice.Visibility = caddyRunning ? Visibility.Collapsed : Visibility.Visible;
-        foreach (var row in _siteRows.Values)
+        if (_siteServerControl is not null)
         {
-            var pendingLabel = _siteActivation is { } change && row.Site.Hostname == change.Hostname ? change.Label : null;
-            var serving = caddyRunning && ServiceIsRunning(row.Site.RuntimeId);
-            row.Status.Text = pendingLabel ?? (!row.Site.Enabled ? "Disabled" : serving ? "Serving" : "Enabled · Offline");
-            var color = pendingLabel is not null || !row.Site.Enabled ? "MutedBrush" : serving ? "SuccessBrush" : "WarningBrush";
-            row.Status.SetResourceReference(TextBlock.ForegroundProperty, color);
-            row.Indicator.SetResourceReference(Ellipse.FillProperty, color);
-            row.Detail.Text = pendingLabel is null && row.Site.Enabled && caddyRunning && !serving ? "The selected PHP runtime is offline." : "";
-            row.Detail.Visibility = row.Detail.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+            _siteServerControl.Content = caddyRunning ? "Stop Caddy" : "Start Caddy";
+            AutomationProperties.SetName(_siteServerControl, caddyRunning ? "Stop Caddy" : "Start Caddy");
         }
+        _updatingInputs = true;
+        try
+        {
+            foreach (var (host, row) in _siteRows)
+            {
+                var site = _snapshot.Sites.FirstOrDefault(site => site.Hostname == host); if (site is null) continue;
+                var pending = _siteActivation is { } change && host == change.Hostname ? change.Label : null;
+                var serving = caddyRunning && ServiceIsRunning(site.RuntimeId);
+                row.Status.Text = pending ?? (!site.Enabled ? "Disabled" : serving ? "Serving" : "Enabled · Offline");
+                row.Status.SetResourceReference(TextBlock.ForegroundProperty, pending is not null || !site.Enabled ? "MutedBrush" : serving ? "SuccessBrush" : "WarningBrush");
+                row.Root.Text = _snapshot.SiteRoots.GetValueOrDefault(host) ?? "Document root unavailable"; row.Root.ToolTip = row.Root.Text;
+                row.Status.ToolTip = site.Enabled && caddyRunning && !serving ? "The selected PHP runtime is offline." : row.Status.Text;
+                row.Picker.SelectedValue = site.RuntimeId; row.Picker.IsEnabled = !Busy;
+                row.Activation.Content = site.Enabled ? "Disable site" : "Enable site";
+                AutomationProperties.SetName(row.Activation, $"{(site.Enabled ? "Disable" : "Enable")} {host}");
+            }
+        }
+        finally { _updatingInputs = false; }
     }
-
     private async Task ChangeSiteActivationAsync(WebSite site)
     {
         if (Busy) return;
@@ -135,7 +110,7 @@ internal sealed partial class ManagerWindow
 
     private Task RenameSiteAsync(WebSite site)
     {
-        var dialog = new Window
+        var dialog = new FluentDialogWindow
         {
             Owner = this, Title = "Rename hostname", Width = 460, SizeToContent = SizeToContent.Height,
             ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false
@@ -201,7 +176,7 @@ internal sealed partial class ManagerWindow
     private Task CreateSiteAsync(ServiceSnapshot[] runtimes)
     {
         using var hold = HoldFocus();
-        var dialog = new Window { Owner = this, Title = "Add site", Width = 480,
+        var dialog = new FluentDialogWindow { Owner = this, Title = "Add site", Width = 480,
             SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner };
         dialog.SetResourceReference(BackgroundProperty, "SurfaceBrush");
         var form = new StackPanel { Margin = new Thickness(20) };

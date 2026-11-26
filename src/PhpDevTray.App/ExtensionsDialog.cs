@@ -1,3 +1,4 @@
+using Button = Wpf.Ui.Controls.Button;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Automation;
@@ -10,7 +11,7 @@ using static PhpDevTray.App.DialogUi;
 
 namespace PhpDevTray.App;
 
-internal sealed class ExtensionsDialog : Window
+internal sealed class ExtensionsDialog : FluentDialogWindow
 {
     private readonly IEnvironmentManager _manager;
     private readonly string _channel;
@@ -81,7 +82,7 @@ internal sealed class ExtensionsDialog : Window
         tools.ColumnDefinitions.Add(new ColumnDefinition());
         tools.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(14) });
         tools.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(146) });
-        _search = new TextBox { Padding = new Thickness(34, 8, 12, 8), MinHeight = 40 };
+        _search = new TextBox { Padding = new Thickness(34, 8, 12, 8), MinHeight = 32 };
         AutomationProperties.SetName(_search, "Search extensions");
         AutomationProperties.SetHelpText(_search, "Filter modules by name. Press Control F to search.");
         var searchGroup = new StackPanel();
@@ -104,7 +105,7 @@ internal sealed class ExtensionsDialog : Window
         _filter = new ComboBox
         {
             ItemsSource = new[] { "All modules", "Enabled", "Disabled", "Built-in", "Needs attention" },
-            SelectedIndex = 0, MinHeight = 40
+            SelectedIndex = 0, MinHeight = 32
         };
         AutomationProperties.SetName(_filter, "Filter extension state");
         var filterGroup = new StackPanel();
@@ -379,7 +380,7 @@ internal sealed class ExtensionsDialog : Window
     private ListBoxItem ExtensionRow(PhpExtensionInfo extension)
     {
         var row = RowGrid();
-        row.MinHeight = 40;
+        row.MinHeight = 32;
         var nameGroup = new DockPanel { LastChildFill = true };
         if (!string.IsNullOrWhiteSpace(extension.Error))
         {
@@ -433,7 +434,7 @@ internal sealed class ExtensionsDialog : Window
             var toggle = new CheckBox
             {
                 IsChecked = _pending.GetValueOrDefault(extension.Name, extension.IsEnabled), IsEnabled = !_busy && CanToggle(extension),
-                MinWidth = 40, MinHeight = 40, HorizontalContentAlignment = HorizontalAlignment.Center,
+                MinWidth = 40, MinHeight = 32, HorizontalContentAlignment = HorizontalAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
                 ToolTip = extension.IsEnabled ? "Disable extension" : extension.IsAvailable ? "Enable extension" : "The extension DLL is not available"
             };
@@ -510,7 +511,7 @@ internal static class DialogUi
 {
     internal static Label FieldLabel(string content, Control target)
     {
-        var label = new Label { Content = content, Target = target, Padding = new Thickness(0), Margin = new Thickness(0, 0, 0, 6), FontSize = 11, FontWeight = FontWeights.SemiBold };
+        var label = new Label { Content = content, Target = target, Padding = new Thickness(0), Margin = new Thickness(0, 0, 0, 6), FontSize = 14 };
         label.SetResourceReference(Control.ForegroundProperty, "TextBrush");
         return label;
     }
@@ -534,7 +535,7 @@ internal static class DialogUi
     }
     internal static TextBlock Text(string text, double size, bool bold = false, bool muted = false, Thickness? margin = null)
     {
-        var value = new TextBlock { Text = text, FontSize = size, FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal, TextWrapping = TextWrapping.Wrap, Margin = margin ?? new Thickness(0) };
+        var value = new TextBlock { Text = text, FontSize = Math.Max(12, size), FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal, TextWrapping = TextWrapping.Wrap, Margin = margin ?? new Thickness(0) };
         value.SetResourceReference(TextBlock.ForegroundProperty, muted ? "MutedBrush" : "TextBrush");
         return value;
     }

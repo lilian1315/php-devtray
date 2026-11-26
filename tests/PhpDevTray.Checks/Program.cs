@@ -25,6 +25,7 @@ try
         await RealRuntimeChecks.RunAsync(args);
         return 0;
     }
+    await ApplicationStateChecks.RunAsync();
     await ApplicationChecks.RunAsync();
     await RuntimeChecks.RunAsync();
     await DownloadChecks.RunAsync();

@@ -13,6 +13,9 @@ public interface IProcessSupervisor : IAsyncDisposable
 
 public interface IEnvironmentManager : IAsyncDisposable
 {
+    OperationTracker? Operations => null;
+    NotificationCenter? Notifications => null;
+    ActivityBuffer? Activity => null;
     event EventHandler? Changed;
     EnvironmentSnapshot Snapshot { get; }
     Task InitializeAsync(CancellationToken cancellationToken = default);

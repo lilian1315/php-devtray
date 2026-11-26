@@ -8,8 +8,7 @@ namespace PhpDevTray.App;
 
 internal sealed class ThemeManager : IDisposable
 {
-    private static readonly IReadOnlyDictionary<string, object> LightPalette = CreatePalette(false);
-    private static readonly IReadOnlyDictionary<string, object> DarkPalette = CreatePalette(true);
+    private static readonly Dictionary<string, IReadOnlyDictionary<string, object>> Palettes = new();
     private ThemePreference _preference = ThemePreference.System;
     private string? _appliedPalette;
     private bool? _appliedMotion;
@@ -33,7 +32,7 @@ internal sealed class ThemeManager : IDisposable
     private void OnPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
         if (e.Category is UserPreferenceCategory.Color or UserPreferenceCategory.VisualStyle or UserPreferenceCategory.Accessibility or UserPreferenceCategory.General)
-            ApplyOnUiThread(SystemParameters.HighContrast);
+            ApplyOnUiThread(invalidatePalette: true);
     }
 
     private void OnSystemParameterChanged(object? sender, PropertyChangedEventArgs e)
@@ -41,13 +40,13 @@ internal sealed class ThemeManager : IDisposable
         if (e.PropertyName is nameof(SystemParameters.HighContrast) or nameof(SystemParameters.ClientAreaAnimation)) ApplyOnUiThread();
     }
 
-    private void ApplyOnUiThread(bool invalidateHighContrast = false)
+    private void ApplyOnUiThread(bool invalidatePalette = false)
     {
         var application = Application.Current;
         if (_disposed || application is null || application.Dispatcher.HasShutdownStarted) return;
         void ApplyCurrent()
         {
-            if (invalidateHighContrast) _appliedPalette = null;
+            if (invalidatePalette) { Palettes.Clear(); _appliedPalette = null; }
             Apply();
         }
         if (application.Dispatcher.CheckAccess()) ApplyCurrent();
@@ -66,10 +65,16 @@ internal sealed class ThemeManager : IDisposable
         });
         if (_appliedPalette != palette)
         {
+            Wpf.Ui.Appearance.ApplicationThemeManager.Apply(highContrast
+                ? Wpf.Ui.Appearance.ApplicationTheme.HighContrast
+                : palette == "Dark" ? Wpf.Ui.Appearance.ApplicationTheme.Dark : Wpf.Ui.Appearance.ApplicationTheme.Light,
+                Wpf.Ui.Controls.WindowBackdropType.Mica);
             if (highContrast) ApplyHighContrast(application.Resources);
             else
             {
-                foreach (var resource in palette == "Dark" ? DarkPalette : LightPalette) application.Resources[resource.Key] = resource.Value;
+                if (!Palettes.TryGetValue(palette, out var resources))
+                    Palettes[palette] = resources = CreatePalette(application.Resources);
+                foreach (var resource in resources) application.Resources[resource.Key] = resource.Value;
             }
             _appliedPalette = palette;
         }
@@ -91,55 +96,55 @@ internal sealed class ThemeManager : IDisposable
         catch (Exception error) when (error is UnauthorizedAccessException or System.Security.SecurityException or System.IO.IOException) { return false; }
     }
 
-    private static IReadOnlyDictionary<string, object> CreatePalette(bool dark)
+    // Product semantics are aliases of WPF UI's Fluent theme, not a second color system.
+    private static IReadOnlyDictionary<string, object> CreatePalette(ResourceDictionary resources)
     {
-        var colors = new Dictionary<string, string>
+        var background = ((SolidColorBrush)resources["ApplicationBackgroundBrush"]).Color;
+        var surface = Resolve("NavigationViewContentBackground", background);
+        var card = Resolve("CardBackground", surface);
+        var aliases = new Dictionary<string, string>
         {
-            ["SurfaceBrush"] = dark ? "#17191E" : "#F7F8FA",
-            ["CardBrush"] = dark ? "#20232A" : "#FFFFFF",
-            ["SidebarBrush"] = dark ? "#13151A" : "#F0F2F5",
-            ["TextBrush"] = dark ? "#F1F3F7" : "#202735",
-            ["MutedBrush"] = dark ? "#ABB3C1" : "#5D6676",
-            ["BorderBrush"] = dark ? "#363D49" : "#D9DFE8",
-            ["InputBorderBrush"] = "#76849A",
-            ["DividerBrush"] = dark ? "#2D333D" : "#E6EAF0",
-            ["HoverBrush"] = dark ? "#2B313C" : "#E9EEF5",
-            ["PressedBrush"] = dark ? "#343D4B" : "#DCE5F1",
-            ["HoverBorderBrush"] = dark ? "#566174" : "#B4C0D1",
-            ["AccentBrush"] = dark ? "#8BB4FF" : "#275DD7",
-            ["AccentHoverBrush"] = dark ? "#A4C5FF" : "#2052C4",
-            ["AccentPressedBrush"] = dark ? "#75A0ED" : "#1944A8",
-            ["AccentTextBrush"] = dark ? "#10203C" : "#FFFFFF",
-            ["AccentSoftBrush"] = dark ? "#25344D" : "#EAF0FE",
-            ["SelectionBrush"] = dark ? "#293B58" : "#E8EFFD",
-            ["SelectedTextBrush"] = dark ? "#BAD2FF" : "#2353BC",
-            ["FocusBrush"] = dark ? "#A4C6FF" : "#3474E8",
-            ["ErrorBrush"] = dark ? "#FFA1A7" : "#B82F3B",
-            ["SuccessBrush"] = dark ? "#80D8B0" : "#19734E",
-            ["WarningBrush"] = dark ? "#E9BE75" : "#8B601C",
-            ["DisabledTextBrush"] = dark ? "#747F90" : "#8993A1",
-            ["DisabledSurfaceBrush"] = dark ? "#252A33" : "#EDF0F5",
-            ["ScrollThumbBrush"] = dark ? "#505B6D" : "#C2CBD7",
-            ["ScrollThumbHoverBrush"] = dark ? "#76849A" : "#9DAABF"
+            ["SurfaceBrush"] = "NavigationViewContentBackground", ["CardBrush"] = "CardBackground",
+            ["SidebarBrush"] = "ApplicationBackgroundBrush", ["TextBrush"] = "TextFillColorPrimaryBrush",
+            ["MutedBrush"] = "TextFillColorSecondaryBrush", ["BorderBrush"] = "CardBorderBrush",
+            ["InputBorderBrush"] = "ControlStrongStrokeColorDefaultBrush", ["DividerBrush"] = "DividerStrokeColorDefaultBrush",
+            ["HoverBrush"] = "SubtleFillColorSecondaryBrush", ["PressedBrush"] = "SubtleFillColorTertiaryBrush",
+            ["HoverBorderBrush"] = "ControlStrongStrokeColorDefaultBrush", ["AccentBrush"] = "AccentFillColorDefaultBrush",
+            ["AccentHoverBrush"] = "AccentFillColorSecondaryBrush", ["AccentPressedBrush"] = "AccentFillColorTertiaryBrush",
+            ["AccentTextBrush"] = "TextOnAccentFillColorPrimaryBrush", ["AccentSoftBrush"] = "SubtleFillColorSecondaryBrush",
+            ["SelectionBrush"] = "SubtleFillColorSecondaryBrush", ["SelectedTextBrush"] = "TextFillColorPrimaryBrush",
+            ["FocusBrush"] = "AccentFillColorDefaultBrush", ["ErrorBrush"] = "SystemFillColorCriticalBrush",
+            ["SuccessBrush"] = "SystemFillColorSuccessBrush", ["WarningBrush"] = "SystemFillColorCautionBrush",
+            ["DisabledTextBrush"] = "TextFillColorDisabledBrush", ["DisabledSurfaceBrush"] = "ControlFillColorDisabledBrush",
+            ["ScrollThumbBrush"] = "ControlStrongFillColorDefaultBrush", ["ScrollThumbHoverBrush"] = "ControlStrongFillColorDefaultBrush"
         };
         var result = new Dictionary<string, object>();
-        foreach (var color in colors)
+        foreach (var (alias, key) in aliases)
         {
-            var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color.Value));
-            brush.Freeze();
-            result[color.Key] = brush;
+            var color = alias switch { "SurfaceBrush" => surface, "CardBrush" => card, _ => Resolve(key, card) };
+            var brush = new SolidColorBrush(color); brush.Freeze(); result[alias] = brush;
         }
-        var shadow = new System.Windows.Media.Effects.DropShadowEffect
-        {
-            Color = Colors.Black, BlurRadius = 18, ShadowDepth = 4, Opacity = dark ? 0.3 : 0.13, RenderingBias = System.Windows.Media.Effects.RenderingBias.Performance
-        };
-        shadow.Freeze();
-        result["PopupShadowEffect"] = shadow;
+        result["LogSelectionBrush"] = result["SelectionBrush"];
+        result["ListBoxItemSelectedBackgroundThemeBrush"] = result["SelectionBrush"];
+        result["ListBoxItemSelectedForegroundThemeBrush"] = result["SelectedTextBrush"];
+        // Fluent cards use borders rather than custom elevation effects.
+        result["PopupShadowEffect"] = null!;
         return result;
-    }
 
+        Color Resolve(string key, Color beneath)
+        {
+            var color = ((SolidColorBrush)resources[key]).Color;
+            var alpha = color.A / 255d;
+            return Color.FromRgb((byte)Math.Round(color.R * alpha + beneath.R * (1 - alpha)),
+                (byte)Math.Round(color.G * alpha + beneath.G * (1 - alpha)),
+                (byte)Math.Round(color.B * alpha + beneath.B * (1 - alpha)));
+        }
+    }
     private static void ApplyHighContrast(ResourceDictionary resources)
     {
+        resources["LogSelectionBrush"] = SystemColors.WindowBrush;
+        resources["ListBoxItemSelectedBackgroundThemeBrush"] = SystemColors.HighlightBrush;
+        resources["ListBoxItemSelectedForegroundThemeBrush"] = SystemColors.HighlightTextBrush;
         foreach (var name in new[] { "SurfaceBrush", "CardBrush", "SidebarBrush", "DisabledSurfaceBrush", "HoverBrush", "PressedBrush", "AccentSoftBrush" }) resources[name] = SystemColors.WindowBrush;
         foreach (var name in new[] { "TextBrush", "MutedBrush", "BorderBrush", "InputBorderBrush", "DividerBrush", "ErrorBrush", "SuccessBrush", "WarningBrush" }) resources[name] = SystemColors.WindowTextBrush;
         foreach (var name in new[] { "AccentBrush", "AccentHoverBrush", "AccentPressedBrush", "SelectionBrush", "FocusBrush", "HoverBorderBrush" }) resources[name] = SystemColors.HighlightBrush;

@@ -24,7 +24,7 @@ internal static class StartupChecks
         try
         {
             window.PrepareSmokeSectionAsync("Settings").GetAwaiter().GetResult();
-            var checkbox = Descendants<CheckBox>(window).Single(c => Equals(c.Content, "Start PHP DevTray with Windows"));
+            var checkbox = Descendants<Wpf.Ui.Controls.ToggleSwitch>(window.PageContent).Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Start PHP DevTray with Windows");
             Require(checkbox.IsChecked == false && checkbox.IsEnabled, "Startup must initially reflect Windows' disabled state.");
             Click(checkbox, true);
             Require(registration.Changes.SequenceEqual([true]) && checkbox.IsChecked == true, "Enabling startup must update Windows registration and read back the resulting state.");
@@ -32,13 +32,13 @@ internal static class StartupChecks
             Require(registration.Changes.SequenceEqual([true, false]) && checkbox.IsChecked == false, "Disabling startup must remove automatic launch.");
             registration.Failure = new IOException("Startup registration denied");
             Click(checkbox, true);
-            Require(checkbox.IsChecked == false && Descendants<TextBlock>(window).Any(t => t.Text == "Startup registration denied"),
+            Require(checkbox.IsChecked == false && window.NotificationHistory.Any(message => message.Message == "Startup registration denied"),
                 "A failed registration must restore the previous checkbox state and show the error.");
             registration.Failure = null;
             registration.State = new(false, "Enable PHP DevTray in Windows Startup settings.");
             window.PrepareSmokeSectionAsync("Sites").GetAwaiter().GetResult();
             window.PrepareSmokeSectionAsync("Settings").GetAwaiter().GetResult();
-            Require(Descendants<TextBlock>(window).Any(t => t.Text == registration.State.Notice), "Reopening settings must reread Windows state and show disabled-task guidance.");
+            Require(Descendants<TextBlock>(window.PageContent).Any(t => t.Text == registration.State.Notice), "Reopening settings must reread Windows state and show disabled-task guidance.");
             Require(!window.IsVisible, "Changing startup settings must not show a hidden manager.");
         }
         finally
@@ -50,7 +50,7 @@ internal static class StartupChecks
         Console.WriteLine("PASS: startup settings enable/disable Windows registration, restore failed changes, and refresh Windows overrides without showing the manager.");
     }
 
-    private static void Click(CheckBox checkbox, bool enabled)
+    private static void Click(Wpf.Ui.Controls.ToggleSwitch checkbox, bool enabled)
     {
         checkbox.IsChecked = enabled;
         checkbox.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
@@ -58,10 +58,24 @@ internal static class StartupChecks
 
     private static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
     {
-        foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>())
+        if (root is Window window)
         {
-            if (child is T item) yield return item;
-            foreach (var descendant in Descendants<T>(child)) yield return descendant;
+            window.Measure(new Size(1120, 800)); window.Arrange(new Rect(0, 0, 1120, 800)); window.UpdateLayout();
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            _ = window.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false));
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+        }
+        var pending = new Stack<DependencyObject>(); pending.Push(root);
+        var seen = new HashSet<DependencyObject>();
+        while (pending.TryPop(out var element))
+        {
+            if (!seen.Add(element)) continue;
+            if (element is T item) yield return item;
+            foreach (var child in LogicalTreeHelper.GetChildren(element).OfType<DependencyObject>()) pending.Push(child);
+            if (element is Wpf.Ui.Controls.CardControl { Header: DependencyObject header }) pending.Push(header);
+            if (element is System.Windows.Media.Visual)
+                for (var index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(element); index++)
+                    pending.Push(System.Windows.Media.VisualTreeHelper.GetChild(element, index));
         }
     }
 

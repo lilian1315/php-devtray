@@ -6,7 +6,7 @@ namespace PhpDevTray.App;
 
 public enum AppIcon
 {
-    App, Server, Terminal, Php, Code, Sites, Globe, Mail, Logs, Download, Settings, Play, Stop,
+    App, Home, Server, Terminal, Php, Code, Sites, Globe, Mail, Logs, Download, Settings, Play, Stop,
     Restart, Plus, Folder, Edit, More, Close, Refresh, Check, Search, ChevronDown, ChevronRight,
     Error, Copy, ExternalLink, Info, Sun, Moon, Monitor
 }
@@ -16,9 +16,25 @@ public static class UiIcon
     public static FrameworkElement Create(AppIcon icon, double size = 18, string? brushKey = null)
     {
         if (size <= 0 || !double.IsFinite(size)) throw new ArgumentOutOfRangeException(nameof(size));
-        var element = new IconElement(icon) { Width = size, Height = size, Focusable = false, IsHitTestVisible = false };
+        FrameworkElement element = icon == AppIcon.Home
+            ? new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Home24) { FontSize = size, Width = size, Height = size, Focusable = false, IsHitTestVisible = false }
+            : new IconElement(icon) { Width = size, Height = size, Focusable = false, IsHitTestVisible = false };
         if (brushKey is not null) element.SetResourceReference(IconElement.ForegroundProperty, brushKey);
         return element;
+    }
+
+    public static Wpf.Ui.Controls.IconElement NavigationIcon(AppIcon icon) => icon == AppIcon.Home
+        ? new Wpf.Ui.Controls.SymbolIcon(Wpf.Ui.Controls.SymbolRegular.Home24) { FontSize = 20 }
+        : new OutlineIcon(icon);
+
+    private sealed class OutlineIcon(AppIcon icon) : Wpf.Ui.Controls.IconElement
+    {
+        protected override UIElement InitializeChildren()
+        {
+            var viewbox = new System.Windows.Controls.Viewbox { Child = Create(icon, 24), Stretch = Stretch.Uniform, Width = 20, Height = 20 };
+            viewbox.SetBinding(TextElement.ForegroundProperty, new System.Windows.Data.Binding(nameof(Foreground)) { Source = this });
+            return viewbox;
+        }
     }
 
     private sealed class IconElement : FrameworkElement
@@ -38,7 +54,7 @@ public static class UiIcon
         {
             base.OnRender(drawingContext);
             var brush = (Brush)GetValue(ForegroundProperty);
-            var pen = new Pen(brush, 1.65) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+            var pen = new Pen(brush, 1.5) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
             var scale = Math.Min(ActualWidth, ActualHeight) / 24;
             drawingContext.PushTransform(new TranslateTransform((ActualWidth - 24 * scale) / 2, (ActualHeight - 24 * scale) / 2));
             drawingContext.PushTransform(new ScaleTransform(scale, scale));
@@ -82,7 +98,7 @@ public static class UiIcon
             [AppIcon.Moon] = "M20.5,14.5 A9,9 0 0 1 9.5,3.5 A9,9 0 1 0 20.5,14.5 Z",
             [AppIcon.Monitor] = "M4.5,3.5 H19.5 A1.5,1.5 0 0 1 21,5 V15 A1.5,1.5 0 0 1 19.5,16.5 H4.5 A1.5,1.5 0 0 1 3,15 V5 A1.5,1.5 0 0 1 4.5,3.5 Z M12,16.5 V21 M7.5,21 H16.5"
         };
-        paths[AppIcon.Php] = paths[AppIcon.Code];
+        paths[AppIcon.Php] = paths[AppIcon.Terminal];
         paths[AppIcon.Sites] = "M3,4.5 H21 V19.5 H3 Z M3,9 H21 M7,6.7 H7.1 M10,6.7 H10.1 M7,13 H12 M7,16 H16";
         paths[AppIcon.Restart] = paths[AppIcon.Refresh];
         var geometries = paths.ToDictionary(pair => pair.Key, pair => { var geometry = Geometry.Parse(pair.Value); geometry.Freeze(); return geometry; });

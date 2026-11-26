@@ -15,7 +15,11 @@ using PhpDevTray.Core;
 public class DesktopPreview : DispatchProxy
 {
     private EventHandler? _changed;
+    private readonly List<string> _restartCalls = [];
+    private readonly List<string> _startCalls = [];
+    private int _stopAllCalls;
     private TaskCompletionSource<IReadOnlyList<RuntimeRelease>>? _releaseLookup;
+    private ServiceKind? _lastReleaseKind;
     private TaskCompletionSource? _siteSave;
     private IReadOnlyList<PhpExtensionInfo> _extensions =
         [new() { Name = "openssl", IsAvailable = true }, new() { Name = "mbstring", IsAvailable = true }];
@@ -51,33 +55,49 @@ public class DesktopPreview : DispatchProxy
                 preview._releaseLookup = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 var lookup = window.PrepareSmokeSectionAsync("Updates", checkReleases: true);
                 await window.Dispatcher.InvokeAsync(window.UpdateLayout, DispatcherPriority.ApplicationIdle);
-                UiSmokeChecks.RequireText(window, "Looking up PHP NTS releases…");
+                var stablePicker = Find<ComboBox>(window, control => control.ItemsSource is IReadOnlyList<RuntimeRelease>);
                 UiSmokeChecks.Validate(window);
                 preview._releaseLookup.SetResult([]);
                 await lookup;
                 window.UpdateLayout();
-                UiSmokeChecks.RequireText(window, "No compatible releases found");
+                Require(ReferenceEquals(stablePicker, Find<ComboBox>(window, control => control.ItemsSource is IReadOnlyList<RuntimeRelease>)), "Release lookup must preserve its input controls.");
 
                 preview._releaseLookup = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 var cancelledLookup = window.PrepareSmokeSectionAsync("Updates", checkReleases: true);
                 window.UpdateLayout();
-                var cancel = FindButton(window, "Cancel lookup")
-                    ?? throw new InvalidOperationException("The in-page lookup must expose a cancel action.");
-                cancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                var active = window.TrackedOperations.Snapshot.Single(item => item.State == OperationState.Running && item.CanCancel);
+                window.TrackedOperations.Cancel(active.Id);
                 await cancelledLookup.WaitAsync(TimeSpan.FromSeconds(5));
-                window.UpdateLayout();
-                if (FindButton(window, "Cancel lookup") is not null)
-                    throw new InvalidOperationException("Cancelled release lookup is still shown as active.");
+                Require(window.TrackedOperations.Snapshot.All(item => item.State != OperationState.Running), "Cancelled release lookup must leave no active operation.");
                 preview._releaseLookup = null;
-                Console.WriteLine("PASS desktop release lookup shows a dedicated loading state, handles empty results and can be cancelled");
+                Console.WriteLine("PASS desktop release lookup preserves inputs, handles empty results and supports central cancellation");
+                var tabs = Find<TabControl>(window, control => AutomationProperties.GetName(control) == "Runtime to install")!;
+                var tabsPeer = new TabControlAutomationPeer(tabs);
+                foreach (var tab in tabs.Items.OfType<TabItem>().Reverse().ToArray())
+                {
+                    var peer = tabsPeer.GetChildren().Single(item => item.GetName() == (string)tab.Header);
+                    var selection = peer.GetPattern(PatternInterface.SelectionItem) as ISelectionItemProvider
+                        ?? throw new InvalidOperationException("Runtime tabs must expose native selection.");
+                    selection.Select();
+                    await window.Dispatcher.InvokeAsync(window.UpdateLayout, DispatcherPriority.ApplicationIdle);
+                    Require(preview._lastReleaseKind == (ServiceKind)tab.Tag && tab.IsSelected,
+                        "Selecting a runtime tab must fetch releases for that runtime and expose native selection.");
+                    Require(ReferenceEquals(tabs, Find<TabControl>(window, control => AutomationProperties.GetName(control) == "Runtime to install")),
+                        "Switching runtime tabs must preserve the tab strip and keyboard focus.");
+                }
+                Console.WriteLine("PASS runtime tabs select PHP NTS, FrankenPHP, Caddy and Mailpit through native automation without replacing controls");
                 await preview.CheckExtensionDialogAsync(window, manager, captureDirectory);
                 await preview.CheckRenameDialogAsync(window, captureDirectory);
                 await preview.CheckSiteActivationAsync(window, captureDirectory);
+                await CheckFluentShellAsync(window);
+                await preview.CheckRestartActionsAsync(window);
+                await CheckActivityAsync(window);
                 foreach (var preference in new[] { ThemePreference.Light, ThemePreference.Dark })
                 foreach (var width in new[] { 560, 1000 })
-                foreach (var section in new[] { "Sites", "Caddy", "PHP Versions", "Mail Trap", "Logs", "Updates", "Settings" })
+                foreach (var section in new[] { "Overview", "Sites", "Caddy", "PHP", "Mail Trap", "Logs", "Updates", "Settings" })
                 {
                     theme.SetPreference(preference);
+                    window.MinWidth = width;
                     window.Width = width;
                     window.Height = 640;
                     await window.PrepareSmokeSectionAsync(section);
@@ -86,7 +106,7 @@ public class DesktopPreview : DispatchProxy
                     var path = Path.Combine(captureDirectory, $"{section.Replace(' ', '-')}-{preference}-{width}.png");
                     Capture(window, path);
                     File.WriteAllLines(path + ".qa.txt", checks);
-                    Console.WriteLine($"PASS desktop {section}, {preference}, {width}");
+                    Console.WriteLine($"PASS desktop {section}, {preference}, requested {width}, actual {window.ActualWidth:0}");
                 }
                 window.CloseForExit();
             }
@@ -276,18 +296,108 @@ public class DesktopPreview : DispatchProxy
 
     private static void Require(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
 
+    private static async Task CheckFluentShellAsync(ManagerWindow window)
+    {
+        var overview = Find<Wpf.Ui.Controls.NavigationViewItem>(window, item => item.TargetPageTag == "Overview")
+            ?? throw new InvalidOperationException("The Fluent pane must contain an Overview navigation item.");
+        var peer = UIElementAutomationPeer.CreatePeerForElement(overview)
+            ?? throw new InvalidOperationException("Navigation items must expose an automation peer.");
+        ((ISelectionItemProvider)peer.GetPattern(PatternInterface.SelectionItem)!).Select();
+        await window.Dispatcher.InvokeAsync(window.UpdateLayout, DispatcherPriority.ApplicationIdle);
+        Require(overview.IsActive, "Invoking a native navigation item must update its selected state.");
+        Require(((ISelectionItemProvider)peer.GetPattern(PatternInterface.SelectionItem)!).IsSelected,
+            "Screen-reader selection must match the visibly active page.");
+        UiSmokeChecks.RequireText(window, "Your local development environment at a glance.");
+        await window.VerifyWindowLifecycleForSmokeAsync();
+        Require(window.IsVisible && overview.IsActive, "Close/minimize/restore must preserve the Fluent shell and selected page.");
+        Console.WriteLine("PASS Fluent navigation automation, selected page, minimize/close-to-tray and maximized restore");
+    }
+    private static async Task CheckActivityAsync(ManagerWindow window)
+    {
+        await window.PrepareSmokeSectionAsync("Logs");
+        await window.Dispatcher.InvokeAsync(window.UpdateLayout, DispatcherPriority.ApplicationIdle);
+        var viewer = Find<LogViewer>(window, _ => true)!;
+        var search = Find<TextBox>(window, item => AutomationProperties.GetName(item) == "Search activity")!;
+        Require(search.IsVisible && search.TranslatePoint(new Point(0, search.ActualHeight), window).Y <= viewer.TranslatePoint(new Point(), window).Y,
+            "Search must remain visible on its own row above the logs.");
+        var filter = Find<ComboBox>(window, item => AutomationProperties.GetName(item) == "Filter activity by service")!;
+        filter.SelectedValue = "application"; window.UpdateLayout();
+        UiSmokeChecks.RequireText(window, "PHP DevTray");
+        Require(!viewer.Text.Contains("[application]") && viewer.Text.Contains("Environment ready") && !viewer.Text.Contains("upstream connection"),
+            "PHP DevTray must filter application records while hiding their redundant source label.");
+        filter.SelectedValue = "All services";
+        var buffer = new ActivityBuffer(); var now = DateTimeOffset.Now;
+        for (var index = 0; index < 200; index++) buffer.Append("php", $"entry {index:000}", now.AddSeconds(index));
+        viewer.UpdateEntries(buffer.Snapshot.Reverse().ToArray());
+        await window.Dispatcher.InvokeAsync(window.UpdateLayout, DispatcherPriority.ApplicationIdle);
+        Require(viewer.Text.IndexOf("entry 000", StringComparison.Ordinal) < viewer.Text.IndexOf("entry 199", StringComparison.Ordinal)
+            && viewer.VerticalOffset > 0 && viewer.VerticalOffset >= viewer.ExtentHeight - viewer.ViewportHeight - 2,
+            "The newest entry must be last, and initial layout must show the bottom of the stream.");
+        viewer.ScrollToHome(); window.UpdateLayout();
+        buffer.Append("php", "entry 200", now.AddSeconds(200)); viewer.UpdateEntries(buffer.Snapshot);
+        await window.Dispatcher.InvokeAsync(window.UpdateLayout, DispatcherPriority.ApplicationIdle);
+        Require(viewer.VerticalOffset < 1, "Appending entries must respect a user who scrolled back.");
+        search.Text = "entry 050"; viewer.FindMatch();
+        Require(viewer.SelectedText == "entry 050" && search.IsVisible, "Search must select matching log text without hiding its input.");
+        search.Clear();
+        Console.WriteLine("PASS Activity ordering, initial tail scroll, preserved history scroll, PHP DevTray filter and persistent search row");
+    }
+    private async Task CheckRestartActionsAsync(ManagerWindow window)
+    {
+        var original = _snapshot;
+        try
+        {
+            _snapshot = original with { Services = [.. original.Services, new() { Id = "php:8.4", Kind = ServiceKind.Php, DisplayName = "PHP 8.4", Status = ServiceStatus.Stopped }] };
+            _changed?.Invoke(this, EventArgs.Empty);
+            await window.PrepareSmokeSectionAsync("Overview");
+            _restartCalls.Clear();
+            FindButton(window, "Restart PHP")!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(_restartCalls.SequenceEqual(["php:8.5"]), "Restart PHP must restart running PHP engines only.");
+            FindButton(window, "Restart Web server")!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            FindButton(window, "Restart Mail Trap")!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(_restartCalls.SequenceEqual(["php:8.5", "caddy", "mailpit"]), "Overview restart buttons must target their own service.");
+            await window.PrepareSmokeSectionAsync("PHP");
+            await window.Dispatcher.InvokeAsync(window.UpdateLayout, DispatcherPriority.ApplicationIdle);
+            FindButton(window, "Restart PHP 8.5.13")!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(_restartCalls.Last() == "php:8.5" && FindButton(window, "Restart PHP 8.4") is { IsVisible: false },
+                "Runtime restart actions must target that row and appear only while running.");
+            _startCalls.Clear(); _stopAllCalls = 0;
+            FindButton(window, "Restart all running services")!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(_stopAllCalls == 1 && _startCalls.Order().SequenceEqual(new[] { "caddy", "mailpit", "php:8.5" }.Order()) && _startCalls.Last() == "caddy",
+                "Restart all must restore exactly the previously running services, with Caddy after its backends.");
+            FindButton(window, "Stop all services")!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(FindButton(window, "Restart all running services") is { IsVisible: false }, "Restart all must disappear when all services are stopped.");
+            Require(FindButton(window, "Refresh environment") is null, "The environment refresh button must be removed.");
+            Console.WriteLine("PASS Overview/runtime restart targets, running-only group restart, Caddy startup ordering and stopped-state actions");
+        }
+        finally { _snapshot = original; _changed?.Invoke(this, EventArgs.Empty); }
+    }
+
+
     protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
     {
         var name = targetMethod!.Name;
         if (name == "get_Snapshot") return _snapshot;
+        if (name is "get_Operations" or "get_Notifications" or "get_Activity") return null;
         if (name == "add_Changed") { _changed += (EventHandler)args![0]!; return null; }
         if (name == "remove_Changed") { _changed -= (EventHandler)args![0]!; return null; }
         if (name == "GetMessagesAsync") return Task.FromResult<IReadOnlyList<MailMessageSummary>>([
             new("welcome", "Welcome to the local application", "hello@example.test", "developer@example.test", new DateTimeOffset(2026, 11, 25, 18, 0, 0, TimeSpan.Zero)),
             new("reset", "Password reset requested", "support@example.test", "developer@example.test", new DateTimeOffset(2026, 11, 25, 17, 58, 0, TimeSpan.Zero))]);
         if (name == "GetMessageTextAsync") return Task.FromResult(args![0]?.ToString() == "reset" ? "Development reset message. No real email was sent." : "Your local development account is ready.");
-        if (name == "GetLogLinesAsync") return Task.FromResult<IReadOnlyList<string>>(["{\"level\":\"Information\",\"message\":\"Environment ready. All services are healthy.\"}"]);
-        if (name == "GetAvailableReleasesAsync") return _releaseLookup?.Task.WaitAsync((CancellationToken)args![1]!) ?? Task.FromResult<IReadOnlyList<RuntimeRelease>>([]);
+        if (name == "GetLogLinesAsync") return Task.FromResult<IReadOnlyList<string>>([
+            "— logs/application/2026-11-25.jsonl —",
+            "{\"timestamp\":\"2026-11-25T12:00:00Z\",\"level\":\"Information\",\"message\":\"Environment ready. All services are healthy.\"}",
+            "{\"timestamp\":\"2026-11-25T12:00:01Z\",\"level\":\"Warning\",\"message\":\"PHP configuration changed. Restart to apply it.\"}",
+            "— logs/caddy/caddy.stderr.log —",
+            "{\"ts\":1795608002,\"level\":\"error\",\"logger\":\"http.log.error\",\"msg\":\"upstream connection refused\",\"address\":\"127.0.0.1:9085\"}",
+            "2026-11-25 13:00:03 PHP runtime ready on 127.0.0.1:9085"
+        ]);
+        if (name == "GetAvailableReleasesAsync")
+        {
+            _lastReleaseKind = (ServiceKind)args![0]!;
+            return _releaseLookup?.Task.WaitAsync((CancellationToken)args[1]!) ?? Task.FromResult<IReadOnlyList<RuntimeRelease>>([]);
+        }
         if (name == "GetPhpExtensionsAsync") return Task.FromResult(_extensions);
         if (name == "ApplyPhpExtensionChangesAsync")
         {
@@ -310,9 +420,12 @@ public class DesktopPreview : DispatchProxy
         if (name == "SaveSiteAsync") return SaveSiteAsync((WebSite)args![0]!, _siteSave?.Task);
         if (name == "StartServiceAsync")
         {
+            _startCalls.Add((string)args![0]!);
             SetServiceStatus((string)args![0]!, ServiceStatus.Running);
             return Task.CompletedTask;
         }
+        if (name == "RestartServiceAsync") { _restartCalls.Add((string)args![0]!); return Task.CompletedTask; }
+        if (name == "StopAllAsync") _stopAllCalls++;
         if (name == "SetThemeAsync") _snapshot = _snapshot with { Theme = (ThemePreference)args![0]! };
         if (name == "SetLastSectionAsync") _snapshot = _snapshot with { LastSection = (string)args![0]! };
         if (name is "StopAllAsync" or "StartAllAsync")

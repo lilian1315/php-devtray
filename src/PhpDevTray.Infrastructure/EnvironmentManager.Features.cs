@@ -14,37 +14,48 @@ public sealed partial class EnvironmentManager
     public async Task<IReadOnlyList<RuntimeRelease>> GetAvailableReleasesAsync(ServiceKind kind, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var releases = await Releases.GetReleasesAsync(kind, cancellationToken);
-        foreach (var release in releases) _knownReleases[release.Id] = release;
-        return releases;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var operation = Operations.Begin($"Fetching {kind} releases", cancellation.Cancel, quiet: true);
+        try
+        {
+            var releases = await Releases.GetReleasesAsync(kind, cancellation.Token);
+            foreach (var release in releases) _knownReleases[release.Id] = release;
+            operation.Complete(); return releases;
+        }
+        catch (Exception error) { operation.Fail(error); throw; }
     }
 
     public Task InstallReleaseAsync(string releaseId, IProgress<RuntimeInstallProgress>? progress = null,
         CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
     {
         if (_knownReleases.TryGetValue(releaseId, out var known)) EnsureNewInstallation(known.Kind, known.Channel);
-        await using var downloaded = await Releases.DownloadAsync(releaseId, progress, cancellationToken);
+        var reporting = new InstallProgressReporter(update =>
+        {
+            Operations.ReportCurrent(update.Phase, update.TotalBytes is > 0 ? update.BytesReceived / (double)update.TotalBytes.Value : null);
+            progress?.Report(update);
+        });
+        await using var downloaded = await Releases.DownloadAsync(releaseId, reporting, cancellationToken);
         EnsureNewInstallation(downloaded.Kind, null);
-        progress?.Report(new("Validating and registering runtime"));
+        reporting.Report(new("Validating and registering runtime"));
         if (downloaded.Kind == ServiceKind.Php)
         {
             // DownloadAsync has just resolved this exact ID again from trusted publisher metadata.
             var identity = System.Text.RegularExpressions.Regex.Match(releaseId, @"^php:(\d+\.\d+\.\d+)(?:-\d+)?:x64:nts$");
             if (!identity.Success) throw new InvalidDataException("The trusted PHP release identifier has an unsupported patch identity.");
             await ImportAndActivatePhpCoreAsync(downloaded.ExecutablePath, cancellationToken, identity.Groups[1].Value);
-            progress?.Report(new("Installed and activated"));
+            reporting.Report(new("Installed and activated"));
             Log("Information", $"Installed verified release {releaseId}");
             return;
         }
         if (downloaded.Kind is ServiceKind.Caddy or ServiceKind.FrankenPhp)
         {
             await ImportWebRuntimeAsync(downloaded.Kind, downloaded.ExecutablePath, cancellationToken, releaseId.Split(':')[1]);
-            progress?.Report(new("Installed"));
+            reporting.Report(new("Installed"));
             return;
         }
         var executable = await _catalog.ImportMailpitAsync(downloaded.ExecutablePath, cancellationToken);
         await CommitSettingsAsync(_settings with { MailpitExecutable = executable }, cancellationToken);
-        progress?.Report(new("Installed"));
+        reporting.Report(new("Installed"));
     }, cancellationToken);
 
     private void EnsureNewInstallation(ServiceKind kind, string? channel)
@@ -52,6 +63,9 @@ public sealed partial class EnvironmentManager
         if (kind == ServiceKind.Mailpit && _settings.MailpitExecutable is not null)
             throw new InvalidOperationException("Mailpit is already installed. A validated update/rollback workflow is not available yet.");
     }
+
+    private sealed class InstallProgressReporter(Action<RuntimeInstallProgress> report) : IProgress<RuntimeInstallProgress>
+    { public void Report(RuntimeInstallProgress value) => report(value); }
 
     public async Task<IReadOnlyList<PhpExtensionInfo>> GetPhpExtensionsAsync(string channel, CancellationToken cancellationToken = default)
     {

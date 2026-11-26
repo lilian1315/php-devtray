@@ -8,6 +8,8 @@
     <ApplicationIcon>$(MSBuildProjectDirectory)\obj\branding\App.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
+    <PackageReference Include="AvalonEdit" Version="6.3.1.120" />
     <Page Remove="Assets/AppLogo.xaml" />
     <EmbeddedResource Include="Assets/AppLogo.xaml" LogicalName="PhpDevTray.App.Assets.AppLogo.xaml" />
     <Resource Include="$(ApplicationIcon)" LogicalName="Assets/App.ico" />

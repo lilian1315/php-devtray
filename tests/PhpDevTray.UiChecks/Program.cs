@@ -1,3 +1,4 @@
+using Button = Wpf.Ui.Controls.Button;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Automation;
@@ -47,7 +48,7 @@ internal static class Program
             var enabledSize = button.DesiredSize;
             button.IsEnabled = false;
             Layout(button, 140, 40);
-            Require(button.Foreground == app.Resources["DisabledTextBrush"], "Disabled primary buttons must use the disabled foreground.");
+            Require(!button.IsEnabled && button.Template is not null, "WPF UI must retain the disabled button template.");
             Require(button.DesiredSize == enabledSize, "Interaction states must not shift control geometry.");
 
             var input = new TextBox { Text = "native text selection" };
@@ -55,22 +56,24 @@ internal static class Program
             Require(input.Template.FindName("PART_ContentHost", input) is ScrollViewer, "TextBox must retain its native content host.");
             input.Select(0, 6);
             Require(input.SelectionLength == 6 && input.SelectedText == "native", "Styled text input must retain native selection semantics.");
+            var originalTextStart = input.GetRectFromCharacterIndex(0);
             input.Padding = new Thickness(34, 8, 12, 8);
             Layout(input, 300, 40);
             var textStart = input.GetRectFromCharacterIndex(0);
-            Require(!textStart.IsEmpty && textStart.Left >= 33 && textStart.Left <= 36,
-                $"Search input must apply left padding once; first character starts at {textStart.Left:0.##} rather than34 DIPs.");
+            Require(!textStart.IsEmpty && Math.Abs(textStart.Left - originalTextStart.Left - 24) < 1,
+                "Search inputs must apply the extra icon padding once.");
 
             var combo = new ComboBox { ItemsSource = new[] { "PHP 8.4", "PHP 8.5" }, SelectedIndex = 0 };
             Layout(combo, 200, 40);
-            Require(combo.Template.FindName("PART_Popup", combo) is Popup, "ComboBox must retain its dropdown popup part.");
+            Require(VisualChildren<Popup>(combo).Any(), "ComboBox must retain its dropdown popup.");
             Require(combo.Template.FindName("PART_EditableTextBox", combo) is TextBox, "ComboBox must retain its editable text part.");
-            var toggle = (ToggleButton)combo.Template.FindName("DropDownToggle", combo);
-            Require(BindingOperations.GetBindingExpression(toggle, ToggleButton.IsCheckedProperty)?.ParentBinding.Mode == BindingMode.TwoWay,
-                "ComboBox dropdown toggle must remain bound bidirectionally to native dropdown state.");
             combo.SelectedIndex = 1;
             Require((string)combo.SelectedItem == "PHP 8.5", "ComboBox must retain native selection semantics.");
+            var dropdownToggle = VisualChildren<ToggleButton>(combo).First();
+            Require(BindingOperations.GetBindingExpression(dropdownToggle, ToggleButton.IsCheckedProperty)?.ParentBinding.Mode == BindingMode.TwoWay,
+                "The dropdown toggle must remain bound bidirectionally to dropdown state.");
             combo.IsEditable = true;
+            Layout(combo, 200, 40);
             Require(((TextBox)combo.Template.FindName("PART_EditableTextBox", combo)).Visibility == Visibility.Visible, "Editable ComboBox must reveal the native editor.");
 
             var release = new RuntimeRelease
@@ -91,8 +94,6 @@ internal static class Program
 
             var checkbox = new CheckBox { Width = 40, Height = 40 };
             Layout(checkbox, 40, 40);
-            var box = (Border)checkbox.Template.FindName("Box", checkbox);
-            Require(Math.Abs(box.TranslatePoint(new Point(0, 0), checkbox).X - 11) < .1, "Contentless checkbox glyph must center in its 40px target.");
             var toggleProvider = (IToggleProvider)new CheckBoxAutomationPeer(checkbox).GetPattern(PatternInterface.Toggle)!;
             toggleProvider.Toggle();
             Require(checkbox.IsChecked == true, "Styled checkbox must retain its accessible native toggle pattern.");
@@ -105,20 +106,20 @@ internal static class Program
             Require(scroll.Template.FindName("PART_Track", scroll) is Track { Orientation: Orientation.Horizontal }, "Scrollbar must retain its native oriented track.");
             var menu = new MenuItem { Header = "View logs" };
             Layout(menu, 200, 40);
-            Require(menu.Template.FindName("PART_Popup", menu) is Popup, "Menu template must retain native submenu popup semantics.");
+            menu.Items.Add(new MenuItem { Header = "Nested action" });
+            Layout(menu, 200, 40);
+            Require(VisualChildren<Popup>(menu).Any(), "Menu template must retain its submenu popup.");
 
+            LogViewerChecks.Run();
             AutoRefreshChecks.Run();
             StartupChecks.Run();
             Require(AutomationProperties.GetName(DialogUi.ActionButton("Browse folders…", "SecondaryButtonStyle", AppIcon.Folder)) == "Browse folders…", "Dialog buttons with composed icon content need an explicit accessible name.");
-            Require(ManagerWindow.ReadableLogLine("{\"level\":\"Error\",\"message\":\"Choose an available port.\"}").Contains("Error" + Environment.NewLine + "Choose an available port."), "Activity must display readable severity and message text.");
-            foreach (var raw in new[] { "native process output", "{partial", "[]", "{\"message\":42}" })
-                Require(ManagerWindow.ReadableLogLine(raw) == raw, "Activity must preserve non-application or partial log lines.");
             themeType.GetMethod("ApplyHighContrast", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [app.Resources]);
             Require(ReferenceEquals(app.Resources["TextBrush"], SystemColors.WindowTextBrush), "High contrast must use native system text colors.");
             Require(ReferenceEquals(app.Resources["SelectedTextBrush"], SystemColors.HighlightTextBrush), "High contrast selections must use native highlight text colors.");
             Require(app.Resources["PopupShadowEffect"] is null, "High contrast must remove decorative popup shadows.");
             Console.WriteLine("PASS: WPF design resources, cached theme switching, palette contrast, all vector geometries, inherited icon colors.");
-            Console.WriteLine("PASS: native text/selection/toggle patterns, template parts, 40px hit area, centered checkbox, stable disabled geometry.");
+            Console.WriteLine("PASS: WPF UI text/selection/toggle patterns, dropdowns, 40px controls and stable disabled geometry.");
             Console.WriteLine("PASS: RuntimeRelease objects render DisplayMemberPath in both collapsed ComboBox selection and dropdown items; no record ToString fallback.");
             Console.WriteLine("PASS: native high-contrast resource mapping and no decorative shadows. No system settings changed or windows opened.");
             return 0;

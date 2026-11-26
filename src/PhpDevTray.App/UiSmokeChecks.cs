@@ -43,7 +43,7 @@ internal static class UiSmokeChecks
             if (string.IsNullOrWhiteSpace(name) && control is ContentControl { Content: string content }) name = content;
             if (string.IsNullOrWhiteSpace(name) && AutomationProperties.GetLabeledBy(control) is Label label) name = label.Content?.ToString();
             if (string.IsNullOrWhiteSpace(name))
-                throw new InvalidOperationException($"An enabled {control.GetType().Name} has no accessible name.");
+                throw new InvalidOperationException($"An enabled {control.GetType().Name} ({control.Name}, content={control.GetValue(ContentControl.ContentProperty)}, parent={control.Parent?.GetType().Name}) has no accessible name.");
         }
         results.Add($"PASS accessible names: {controls.Length} enabled keyboard controls");
         var checkedText = 0;
@@ -52,21 +52,22 @@ internal static class UiSmokeChecks
             if (block.Foreground is not SolidColorBrush { Color.A: 255 } foreground) continue;
             var background = FindBackground(block);
             var contrast = Ratio(foreground.Color, background);
-            if (contrast < 4.5)
-                throw new InvalidOperationException($"Rendered text '{block.Text[..Math.Min(block.Text.Length, 80)]}' has {contrast:0.00}:1 contrast against its surface.");
+            var minimumContrast = block.Text.All(character => char.GetUnicodeCategory(character) == System.Globalization.UnicodeCategory.PrivateUse) ? 3.0 : 4.5;
+            if (contrast < minimumContrast)
+                throw new InvalidOperationException($"Rendered text '{block.Text[..Math.Min(block.Text.Length, 80)]}' has {contrast:0.00}:1 contrast against its surface (foreground={foreground.Color}, background={background}).");
             checkedText++;
         }
         results.Add($"PASS rendered text contrast: {checkedText} visible enabled text blocks");
-        var navigation = controls.OfType<Button>().Where(button => ReferenceEquals(button.Style, window.TryFindResource("NavigationButtonStyle"))).ToArray();
-        if (navigation.Length > 0 && navigation.Count(button => Equals(button.Tag, "Selected")) != 1)
+        var navigation = Descendants(window).OfType<Wpf.Ui.Controls.NavigationViewItem>().Where(item => Equals(item.Tag, "MainNavigation")).ToArray();
+        if (navigation.Length > 0 && navigation.Count(item => item.IsActive) != 1)
             throw new InvalidOperationException("The manager must identify exactly one selected navigation section.");
-        if (navigation.FirstOrDefault(button => Equals(button.Tag, "Selected")) is { } selectedNavigation)
+        if (navigation.FirstOrDefault(item => item.IsActive) is { } selectedNavigation)
             results.Add($"PASS selected navigation: {AutomationProperties.GetName(selectedNavigation)}");
-        foreach (var button in navigation)
+        foreach (var item in navigation)
         {
-            if (button.Content is not StackPanel items || !items.Children.OfType<TextBlock>().Any(text => text.IsVisible)) continue;
-            if (items.DesiredSize.Width > button.ActualWidth - button.Padding.Left - button.Padding.Right + 1)
-                throw new InvalidOperationException($"Navigation label '{AutomationProperties.GetName(button)}' is clipped.");
+            if (!item.IsPaneOpen || !item.IsVisible) continue;
+            if (Descendants(item).OfType<TextBlock>().Any(text => text.IsVisible && text.DesiredSize.Width > text.ActualWidth + 1))
+                throw new InvalidOperationException($"Navigation label '{AutomationProperties.GetName(item)}' is clipped.");
         }
         results.Add("PASS visible navigation labels fit their buttons");
         foreach (var viewport in Descendants(window).OfType<ScrollViewer>().Where(viewport => viewport.IsVisible && Equals(viewport.Tag, "EmptyStateScroll")).ToArray())

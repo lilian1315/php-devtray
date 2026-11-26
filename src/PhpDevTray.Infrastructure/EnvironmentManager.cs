@@ -35,6 +35,10 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
     private bool _disposed;
     private bool _busy;
     private string? _lastError;
+    private readonly ActivityLogReader _activityReader;
+    public OperationTracker Operations { get; } = new();
+    public NotificationCenter Notifications { get; } = new();
+    public ActivityBuffer Activity { get; } = new();
 
     public EnvironmentManager(string dataDirectory, IProcessSupervisor supervisor, RuntimeCatalog catalog)
     {
@@ -42,6 +46,12 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
         _supervisor = supervisor;
         _catalog = catalog;
         _snapshot = new EnvironmentSnapshot { DataDirectory = _dataDirectory };
+        _activityReader = new ActivityLogReader(Path.Combine(_dataDirectory, "logs"), Activity);
+        Operations.Finished += (_, operation) =>
+        {
+            if (operation.State == OperationState.Failed) Notifications.Publish("Operation failed", operation.Error ?? operation.Name, NotificationSeverity.Error);
+            else if (!operation.Quiet && operation.State == OperationState.Succeeded) Notifications.Publish("Completed", operation.Name, NotificationSeverity.Success);
+        };
         _supervisor.ServiceChanged += OnServiceChanged;
     }
 
@@ -51,6 +61,7 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
     public Task InitializeAsync(CancellationToken cancellationToken = default) => ExecuteAsync(async () =>
     {
         if (_initialized) return;
+        await _activityReader.StartAsync();
         _caddy = await CaddyStack.LoadAsync(_dataDirectory, cancellationToken);
         _settings = await _catalog.LoadAsync(cancellationToken);
         await RefreshSiteRootsAsync(cancellationToken);
@@ -235,21 +246,26 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
         _settings = proposed;
     }
 
-    private async Task ExecuteAsync(Func<Task> action, CancellationToken cancellationToken, bool clearError = true)
+    private async Task ExecuteAsync(Func<Task> action, CancellationToken cancellationToken, bool clearError = true,
+        [System.Runtime.CompilerServices.CallerMemberName] string operationName = "")
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        await _operations.WaitAsync(cancellationToken);
+        using var operation = Operations.Begin(OperationName(operationName), quiet: operationName is "InitializeAsync" or "RefreshAsync" or "SetLastSectionAsync" or "SetThemeAsync");
+        try { await _operations.WaitAsync(cancellationToken); }
+        catch (Exception error) { operation.Fail(error); throw; }
         try
         {
             _busy = true;
             if (clearError) _lastError = null;
             Publish();
             await action();
+            operation.Complete();
         }
         catch (Exception error)
         {
             _lastError = error.Message;
             Log("Error", error.ToString());
+            operation.Fail(error);
             throw;
         }
         finally
@@ -259,6 +275,8 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
             _operations.Release();
         }
     }
+
+    private static string OperationName(string method) => Regex.Replace(method.Replace("Async", ""), "(?<!^)([A-Z])", " $1");
 
     private async Task RefreshSiteRootsAsync(CancellationToken token)
     {
@@ -364,7 +382,8 @@ public sealed partial class EnvironmentManager : IEnvironmentManager
             finally
             {
                 _supervisor.ServiceChanged -= OnServiceChanged;
-                await _supervisor.DisposeAsync();
+                try { await _supervisor.DisposeAsync(); }
+                finally { await _activityReader.DisposeAsync(); }
             }
         }
         finally { _operations.Release(); }

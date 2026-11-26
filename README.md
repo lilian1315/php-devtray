@@ -4,7 +4,7 @@ PHP DevTray (PDT) manages local PHP development environments on Windows.
 
 A Windows desktop application that keeps running in the tray using the original **C# / .NET 10 / WPF** stack. The UI and runtime management layer are separate projects; native Windows Job Objects contain the services.
 
-This is **0.7.0 preview**: a normal resizable desktop window that hides to the tray on minimize or Close, preserving services and restoring its previous window state. It includes the reviewed summary cards, Caddy site configuration, raw Activity log and installer tabs. The complete version 1.0 specification is still in progress.
+This is **0.8.0 preview**: a Fluent desktop window that hides to the tray on minimize or Close, preserving services and restoring its previous window state. It includes unified PHP/FrankenPHP management, consistent site and runtime cards, service restart actions, runtime installer tabs, compact notifications, and a searchable, session-only Activity stream. The complete version 1.0 specification is still in progress.
 
 ![PHP DevTray](docs/images/php-devtray-light.png)
 
@@ -30,7 +30,7 @@ Store builds provide Start menu access and a Windows-managed `php.exe` command a
 
 ## Run
 
-Open `artifacts/releases/0.7.0/PhpDevTray.exe`. The normal resizable window opens on launch. Minimize or Close hides it to the tray while services continue. Left-click its notification icon to restore it, including its maximized state. Right-click for **Open manager**, **Start all / Stop all**, and **Exit and stop services**.
+Open `artifacts/releases/0.8.0/PhpDevTray.exe`. The normal resizable window opens on launch. Minimize or Close hides it to the tray while services continue. Left-click its notification icon to restore it, including its maximized state. Right-click for **Open manager**, **Start all / Stop all**, and **Exit and stop services**.
 
 Enable **Settings > Startup > Start PHP DevTray with Windows** to start the configured services when you sign in, with no manager window. The tray icon remains available. This option is off by default. Startup failures are recorded in the application logs and can be inspected by opening the manager. A manual launch still opens the window.
 
@@ -39,7 +39,7 @@ The published folder is self-contained for Windows x64. Keep the full folder, in
 To launch the application from a terminal, run:
 
 ```powershell
-.\artifacts\releases\0.7.0\PhpDevTray.exe
+.\artifacts\releases\0.8.0\PhpDevTray.exe
 ```
 
 Unpackaged application data is stored in `%LOCALAPPDATA%\PhpDevTray`. Store builds use `%LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalState\PhpDevTray`. No runtimes are bundled or started on first launch. Unpackaged PATH integration is off until explicitly enabled; Store builds use Windows' App execution aliases controls instead.
@@ -47,7 +47,7 @@ Unpackaged application data is stored in `%LOCALAPPDATA%\PhpDevTray`. Store buil
 For an isolated development profile:
 
 ```powershell
-.\artifacts\releases\0.7.0\PhpDevTray.exe --data-directory C:\Dev\PhpDevTrayData
+.\artifacts\releases\0.8.0\PhpDevTray.exe --data-directory C:\Dev\PhpDevTrayData
 ```
 
 Exit the older tray instance before opening the new executable. Only one ordinary instance runs in a Windows session. Exit the existing instance before changing its data-directory argument.
@@ -104,14 +104,14 @@ An explicit SDK executable is also supported:
 .\scripts\build.ps1 -DotNetPath C:\Tools\dotnet\dotnet.exe -Publish
 ```
 
-The first command builds Release and runs the process/configuration checks plus WPF control-resource regression checks. Publishing creates the complete Windows app under `artifacts/releases/0.7.0/` and deploys the independent PHP launcher under `artifacts/releases/0.7.0/cli/`.
+The first command builds Release and runs the process/configuration checks plus WPF control-resource regression checks. Publishing creates the complete Windows app under `artifacts/releases/0.8.0/` and deploys the independent PHP launcher under `artifacts/releases/0.8.0/cli/`.
 
 With the Windows SDK installed, `scripts/build-store-package.ps1 -DevelopmentIdentity` packages that output into a test MSIX under `artifacts/store/`. Store submission requires the exact Partner Center identity; see [release instructions](docs/RELEASING.md).
 
 For a rendered popup smoke test without touching the ordinary application profile:
 
 ```powershell
-.\artifacts\releases\0.7.0\PhpDevTray.exe --smoke-test C:\Dev\PdtSmoke --screenshot C:\Dev\PdtSmoke\popup.png
+.\artifacts\releases\0.8.0\PhpDevTray.exe --smoke-test C:\Dev\PdtSmoke --screenshot C:\Dev\PdtSmoke\popup.png
 ```
 
 This creates an isolated empty profile, renders the actual WPF popup, writes a PNG, cleans up the tray resources, and exits. Add `--smoke-section Settings` to inspect another section, `--theme Dark` for the dark palette, or `--verify-ui` for contrast and accessible-name assertions. `--smoke-width 860` forces a test viewport even on a smaller display; omit it to exercise work-area sizing.
@@ -123,7 +123,7 @@ The opt-in web setup check downloads verified Caddy and FrankenPHP distributions
 The separate PHP patch acceptance test downloads an archived official Windows PHP build, verifies its publisher SBOM checksum, and exercises live update/rollback against the current release:
 
 ```powershell
-dotnet tests/PhpDevTray.Checks/bin/Release/net10.0-windows/PhpDevTray.Checks.dll --real-php-updates --profile C:\Dev\PdtPatchChecks --cli-bundle C:\Dev\PhpDevTray\artifacts\releases\0.7.0\cli --report C:\Dev\PdtPatchReport.md
+dotnet tests/PhpDevTray.Checks/bin/Release/net10.0-windows/PhpDevTray.Checks.dll --real-php-updates --profile C:\Dev\PdtPatchChecks --cli-bundle C:\Dev\PhpDevTray\artifacts\releases\0.8.0\cli --report C:\Dev\PdtPatchReport.md
 ```
 
 Use a new empty profile and available PHP backend ports. This test starts actual PHP processes inside Jobs, leaves unrelated listeners alone, and does not enable PATH integration or modify hosts. Results are recorded in [REAL-PHP-UPDATES.md](docs/REAL-PHP-UPDATES.md).
@@ -131,7 +131,7 @@ Use a new empty profile and available PHP backend ports. This test starts actual
 For the opt-in actual-runtime checks, build/publish first, then invoke the checks executable with absolute paths:
 
 ```powershell
-dotnet tests/PhpDevTray.Checks/bin/Release/net10.0-windows/PhpDevTray.Checks.dll --real-runtimes --profile C:\Dev\PdtIntegration --cli-bundle C:\Dev\PhpDevTray\artifacts\releases\0.7.0\cli --report C:\Dev\PdtIntegrationReport.md
+dotnet tests/PhpDevTray.Checks/bin/Release/net10.0-windows/PhpDevTray.Checks.dll --real-runtimes --profile C:\Dev\PdtIntegration --cli-bundle C:\Dev\PhpDevTray\artifacts\releases\0.8.0\cli --report C:\Dev\PdtIntegrationReport.md
 ```
 
 Use a dedicated empty profile. The harness requires available PHP backend ports, installs two PHP channels plus Mailpit, selects temporary SMTP/HTTP ports, runs the assertions, and stops all owned services. The profile remains available for diagnosis. It never kills unrelated listeners or changes PATH/hosts.

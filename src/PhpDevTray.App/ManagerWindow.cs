@@ -1,3 +1,4 @@
+using Button = Wpf.Ui.Controls.Button;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -13,24 +14,19 @@ using Microsoft.Win32;
 
 namespace PhpDevTray.App;
 
-internal sealed partial class ManagerWindow : Window
+internal sealed partial class ManagerWindow : Wpf.Ui.Controls.FluentWindow
 {
-    private static readonly string[] Sections = ["Sites", "Caddy", "PHP Versions", "Mail Trap", "Logs", "Updates", "Settings"];
+    private static readonly string[] Sections = ["Overview", "Sites", "Caddy", "PHP", "Mail Trap", "Logs", "Updates", "Settings"];
     private readonly IEnvironmentManager _manager;
-    private readonly TextBlock _overall, _operationText, _errorText, _pageTitle, _pageDescription;
+    private readonly TextBlock _overall, _operationText, _pageTitle, _pageDescription;
     private readonly Button _globalAction;
-    private readonly Button _environmentRefresh;
-    private readonly Border _errorBanner;
+    private readonly Button _globalRestart;
     private readonly Grid _contentHost;
     private readonly WrapPanel _pageActions;
     private bool _updatesPaused;
-    private readonly Dictionary<string, Button> _navigation = new();
+    private readonly Dictionary<string, Wpf.Ui.Controls.NavigationViewItem> _navigation = new();
     private readonly Dictionary<ServiceKind, TextBlock> _serviceLabels = new();
-    private readonly Dictionary<ServiceKind, Border> _serviceDots = new();
-    private readonly Dictionary<ServiceKind, Button> _serviceButtons = new();
     private readonly Dictionary<ServiceKind, Button> _serviceToggles = new();
-    private readonly Dictionary<ServiceKind, Border> _serviceCards = new();
-    private readonly List<FrameworkElement> _serviceGlyphs = [];
     private readonly Dictionary<string, PhpRow> _phpRows = new();
     private readonly Dictionary<ServiceKind, InlineService> _inlineServices = new();
     private readonly List<(Button Button, Func<bool> Enabled)> _bodyButtons = [];
@@ -39,7 +35,8 @@ internal sealed partial class ManagerWindow : Window
     private string? _autoRefreshPage, _autoRefreshError;
     private EnvironmentSnapshot _snapshot;
     private string _section, _bodySignature = string.Empty;
-    private string? _renderedSection, _error, _dismissedError, _operation;
+    private string? _renderedSection, _dismissedError, _operation;
+    private OperationHandle? _foregroundOperation;
     private int _focusHold;
     private long _ignoreDeactivationUntil;
     private bool _closeForExit, _shutdown, _updatingInputs;
@@ -49,15 +46,14 @@ internal sealed partial class ManagerWindow : Window
     private IReadOnlyList<string> _logLines = [];
     private string? _selectedMessageId, _loadedMessageId;
     private ListBox? _mailList;
-    private TextBox? _mailSearch, _mailPreview, _logOutput;
+    private TextBox? _mailSearch, _mailPreview;
+    private LogViewer? _logOutput;
     private TextBlock? _mailSubject, _mailMetadata;
     private TextBlock? _mailResults;
     private Border? _mailNoResults;
     private Grid? _mailDetail;
-    private string? _feedbackMessage;
     private CancellationTokenSource? _messageCancellation;
-    private ServiceKind? _runtimeTab;
-    private ListBox? _runtimeSelector;
+    private TabControl? _runtimeSelector;
     private ServiceKind _releaseKind = ServiceKind.Php;
     private string? _releasePhpChannel;
     private IReadOnlyList<RuntimeRelease> _releases = [];
@@ -67,143 +63,17 @@ internal sealed partial class ManagerWindow : Window
     private CancellationTokenSource? _releaseCheck;
     private CancellationTokenSource? _installCancellation;
     private RuntimeInstallProgress? _installProgress;
-    private long _lastProgressRender;
     private ContentControl? _releaseContent;
     private ComboBox? _releaseVersionPicker;
-    private string _releaseSignature = string.Empty;
-    private TextBlock? _installPhase, _installBytes;
-    private ProgressBar? _downloadBar;
-    private Border? _downloadPanel;
-    private Button? _cancelDownload;
-    private readonly Dictionary<ThemePreference, Button> _themeButtons = new();
-    private CheckBox? _pathSetting;
+    private ComboBox? _appearancePicker;
+    private Wpf.Ui.Controls.ToggleSwitch? _pathSetting;
     private readonly IStartupRegistration _startupRegistration;
-    private CheckBox? _startupSetting;
+    private Wpf.Ui.Controls.ToggleSwitch? _startupSetting;
     private TextBlock? _startupNotice;
     private StartupRegistrationState? _startupState;
     private bool _startupChanging;
     private ComboBox? _defaultPhpPicker;
     private WindowState _restoreState = WindowState.Normal;
-
-    public ManagerWindow(IEnvironmentManager manager, IStartupRegistration? startupRegistration = null)
-    {
-        _manager = manager; _snapshot = manager.Snapshot;
-        _startupRegistration = startupRegistration ?? new StartupRegistration(_snapshot.DataDirectory);
-        _section = Sections.Contains(_snapshot.LastSection) ? _snapshot.LastSection : Sections[0];
-        Title = "PHP DevTray"; Width = 1000; Height = 740; MinWidth = 560; MinHeight = 500;
-        Icon = AppLogo.WindowIcon;
-        WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        ShowInTaskbar = true; WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanResize;
-        AllowsTransparency = false; Topmost = false; SetResourceReference(BackgroundProperty, "SurfaceBrush");
-        var layout = new Grid();
-        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(184) });
-        layout.ColumnDefinitions.Add(new ColumnDefinition());
-        var shell = new Border { Child = layout };
-        shell.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush");
-        shell.ClipToBounds = true; Content = shell;
-
-        var sidebar = new DockPanel { LastChildFill = true, Margin = new Thickness(12, 21, 12, 13) };
-        var sidebarSurface = new Border { Child = sidebar, BorderThickness = new Thickness(0, 0, 1, 0) };
-        sidebarSurface.SetResourceReference(Border.BackgroundProperty, "SidebarBrush");
-        sidebarSurface.SetResourceReference(Border.BorderBrushProperty, "DividerBrush");
-        layout.Children.Add(sidebarSurface);
-        var lower = new StackPanel();
-        lower.Children.Add(Nav("Settings", "Settings", AppIcon.Settings));
-        DockPanel.SetDock(lower, Dock.Bottom); sidebar.Children.Add(lower);
-        var nav = new StackPanel();
-        nav.Children.Add(Nav("Sites", "Sites", AppIcon.Sites));
-        nav.Children.Add(Nav("Caddy", "Caddy", AppIcon.Server));
-        nav.Children.Add(Nav("PHP Versions", "PHP runtimes", AppIcon.Terminal));
-        nav.Children.Add(Nav("Mail Trap", "Mail Trap", AppIcon.Mail));
-        nav.Children.Add(Nav("Logs", "Activity", AppIcon.Logs));
-        var navDivider = new Border { Height = 1, Margin = new Thickness(12, 17, 12, 15) }; navDivider.SetResourceReference(Border.BackgroundProperty, "DividerBrush"); nav.Children.Add(navDivider);
-        nav.Children.Add(Nav("Updates", "Install runtimes", AppIcon.Download));
-        sidebar.Children.Add(nav);
-
-        var main = new Grid(); Grid.SetColumn(main, 1); layout.Children.Add(main);
-        main.RowDefinitions.Add(new RowDefinition { Height = new GridLength(68) });
-        main.RowDefinitions.Add(new RowDefinition { Height = new GridLength(84) });
-        main.RowDefinitions.Add(new RowDefinition());
-        main.RowDefinitions.Add(new RowDefinition { Height = new GridLength(38) });
-        var header = new Grid { Margin = new Thickness(24, 0, 17, 0) };
-        header.ColumnDefinitions.Add(new ColumnDefinition()); header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        identity.Children.Add(T("Your local environment", 18, true));
-        _overall = T(string.Empty, 11, muted: true, margin: new Thickness(0, 4, 0, 0)); identity.Children.Add(_overall); header.Children.Add(identity);
-        var headerActions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        _globalAction = new Button { MinWidth = 104, Margin = new Thickness(0, 0, 9, 0) };
-        _globalAction.SetResourceReference(StyleProperty, "PrimaryButtonStyle");
-        _globalAction.Click += async (_, _) => await RunAsync(AnyRunning ? "Stopping services…" : "Starting services…", () => AnyRunning ? _manager.StopAllAsync(_lifetime.Token) : _manager.StartAllAsync(_lifetime.Token));
-        headerActions.Children.Add(_globalAction);
-
-        Grid.SetColumn(headerActions, 1); header.Children.Add(headerActions); main.Children.Add(header);
-
-        var serviceStrip = new UniformGrid { Columns = 3, Margin = new Thickness(24, 8, 18, 8) };
-        AddServiceChip(serviceStrip, ServiceKind.Caddy, "Caddy", AppIcon.Server, "Caddy");
-        AddServiceChip(serviceStrip, ServiceKind.Php, "PHP", AppIcon.Terminal, "PHP Versions");
-        AddServiceChip(serviceStrip, ServiceKind.Mailpit, "Mail Trap", AppIcon.Mail, "Mail Trap");
-        var serviceSurface = new Border { Child = serviceStrip, BorderThickness = new Thickness(0, 1, 0, 1) };
-        serviceSurface.SetResourceReference(Border.BorderBrushProperty, "DividerBrush"); Grid.SetRow(serviceSurface, 1); main.Children.Add(serviceSurface);
-
-        var page = new Grid { Margin = new Thickness(24, 22, 24, 0) };
-        page.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); page.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); page.RowDefinitions.Add(new RowDefinition());
-        var errorLayout = new DockPanel();
-        var dismiss = new Button { Content = UiIcon.Create(AppIcon.Close, 15), ToolTip = "Dismiss error", VerticalAlignment = VerticalAlignment.Top };
-        dismiss.SetResourceReference(StyleProperty, "IconButtonStyle"); dismiss.Click += (_, _) => { _dismissedError = _error; _error = null; Render(_snapshot); }; AutomationProperties.SetName(dismiss, "Dismiss error"); DockPanel.SetDock(dismiss, Dock.Right); errorLayout.Children.Add(dismiss);
-        _errorText = T(string.Empty, 12); _errorText.VerticalAlignment = VerticalAlignment.Center; _errorText.SetResourceReference(TextBlock.ForegroundProperty, "ErrorBrush"); AutomationProperties.SetLiveSetting(_errorText, AutomationLiveSetting.Polite);
-        var errorMessage = new ScrollViewer { Content = _errorText, MaxHeight = 96, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalContentAlignment = VerticalAlignment.Center };
-        AutomationProperties.SetName(errorMessage, "Notification details"); errorLayout.Children.Add(errorMessage);
-        var errorContent = new StackPanel(); errorContent.Children.Add(errorLayout);
-        var errorActions = new WrapPanel();
-        var copyError = new Button { Content = "Copy details", Margin = new Thickness(0, 4, 6, 0) }; copyError.SetResourceReference(StyleProperty, "QuietButtonStyle");
-        AutomationProperties.SetName(copyError, "Copy error details");
-        copyError.Click += (_, _) => { try { _ = CopyTextAsync(_errorText.Text, "Error details copied to clipboard."); } catch (Exception exception) { ShowError(exception.Message); } };
-        errorActions.Children.Add(copyError);
-        var showActivity = new Button { Content = "View activity", Margin = new Thickness(0, 4, 0, 0) }; showActivity.SetResourceReference(StyleProperty, "QuietButtonStyle");
-        AutomationProperties.SetName(showActivity, "View activity to investigate this error"); showActivity.Click += async (_, _) => await NavigateAsync("Logs"); errorActions.Children.Add(showActivity);
-        errorContent.Children.Add(errorActions);
-        _errorBanner = Surface(errorContent, "CardBrush", 8, new Thickness(10, 4, 4, 4)); _errorBanner.Margin = new Thickness(0, 0, 0, 12); _errorBanner.Visibility = Visibility.Collapsed; page.Children.Add(_errorBanner);
-        var heading = new Grid { Margin = new Thickness(0, 0, 0, 16) }; heading.ColumnDefinitions.Add(new ColumnDefinition()); heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        heading.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); heading.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var titleBlock = new StackPanel(); _pageTitle = T(string.Empty, 22, true); _pageDescription = T(string.Empty, 12, muted: true, margin: new Thickness(0, 5, 16, 0)); titleBlock.Children.Add(_pageTitle); titleBlock.Children.Add(_pageDescription); heading.Children.Add(titleBlock);
-        _pageActions = new WrapPanel { VerticalAlignment = VerticalAlignment.Top }; Grid.SetColumn(_pageActions, 1); heading.Children.Add(_pageActions); Grid.SetRow(heading, 1); page.Children.Add(heading);
-        _contentHost = new Grid { ClipToBounds = true }; Grid.SetRow(_contentHost, 2); page.Children.Add(_contentHost); Grid.SetRow(page, 2); main.Children.Add(page);
-
-        var footer = new Grid { Margin = new Thickness(24, 0, 18, 0) }; footer.ColumnDefinitions.Add(new ColumnDefinition()); footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        _operationText = T(string.Empty, 10, muted: true); _operationText.VerticalAlignment = VerticalAlignment.Center; AutomationProperties.SetLiveSetting(_operationText, AutomationLiveSetting.Polite); footer.Children.Add(_operationText);
-        var refresh = _environmentRefresh = new Button { Content = UiIcon.Create(AppIcon.Refresh, 15), ToolTip = "Refresh environment" }; refresh.SetResourceReference(StyleProperty, "IconButtonStyle"); AutomationProperties.SetName(refresh, "Refresh environment"); refresh.Click += async (_, _) => await RunAsync("Refreshing…", () => _manager.RefreshAsync(_lifetime.Token)); Grid.SetColumn(refresh, 1); footer.Children.Add(refresh); Grid.SetRow(footer, 3); main.Children.Add(footer);
-
-        SizeChanged += (_, _) =>
-        {
-            var compact = ActualWidth < 730;
-            Grid.SetColumn(_pageActions, compact ? 0 : 1);
-            Grid.SetRow(_pageActions, compact ? 1 : 0);
-            _pageActions.Margin = compact ? new Thickness(0, 12, 0, 0) : new Thickness(0);
-            foreach (var glyph in _serviceGlyphs) glyph.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-            layout.ColumnDefinitions[0].Width = new GridLength(compact ? 64 : 184);
-            foreach (var text in nav.Children.OfType<TextBlock>().Concat(lower.Children.OfType<TextBlock>())) text.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-            foreach (var button in _navigation.Values)
-            {
-                button.HorizontalContentAlignment = compact ? HorizontalAlignment.Center : HorizontalAlignment.Left;
-                if (button.Content is StackPanel items)
-                {
-                    items.Children[0].SetValue(MarginProperty, compact ? new Thickness(0) : new Thickness(0, 0, 8, 0));
-                    items.Children[1].Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-                }
-            }
-        };
-        StateChanged += (_, _) => { if (WindowState == WindowState.Minimized) Hide(); else _restoreState = WindowState; };
-        _pageRefresher = new PageAutoRefresher(Dispatcher, RefreshVisiblePageAsync);
-        IsVisibleChanged += (_, _) => UpdatePageRefresh();
-        Activated += async (_, _) => { if (_section == "Settings") await ReadStartupSettingAsync(); };
-        Closing += OnClosing;
-        PreviewKeyDown += (_, args) =>
-        {
-            if (args.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control && _mailSearch is not null) { _mailSearch.Focus(); _mailSearch.SelectAll(); args.Handled = true; }
-
-        };
-        Render(_snapshot);
-    }
 
     public void RestoreWindow()
     {
@@ -215,7 +85,7 @@ internal sealed partial class ManagerWindow : Window
 
     internal async Task VerifyWindowLifecycleForSmokeAsync()
     {
-        if (!ShowInTaskbar || Topmost || AllowsTransparency || ResizeMode != ResizeMode.CanResize || WindowStyle != WindowStyle.SingleBorderWindow)
+        if (!ShowInTaskbar || Topmost || AllowsTransparency || ResizeMode != ResizeMode.CanResize || !ExtendsContentIntoTitleBar)
             throw new InvalidOperationException("Expected a normal resizable desktop window.");
         WindowState = WindowState.Maximized;
         await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
@@ -235,34 +105,34 @@ internal sealed partial class ManagerWindow : Window
     internal void SetSmokeSection(string section)
     {
         if (!Sections.Contains(section)) throw new ArgumentException("Unknown manager section.", nameof(section));
-        _section = section; _renderedSection = null; Render(_snapshot);
+        _suppressNavigationEffects = true;
+        try { if (!_shellNavigation.Navigate(section)) Render(_snapshot); } finally { _suppressNavigationEffects = false; }
     }
 
     public void Render(EnvironmentSnapshot snapshot)
     {
         _snapshot = snapshot;
-        if (snapshot.LastError is { Length: > 0 } remote && remote != _dismissedError) _error ??= remote;
+        if (snapshot.LastError is { Length: > 0 } remote && remote != _dismissedError) { _dismissedError = remote; ShowError(remote); }
         var runningCount = snapshot.Services.Count(s => s.Status == ServiceStatus.Running);
         _overall.Text = snapshot.IsBusy ? "Applying changes…" : snapshot.Services.Any(s => s.Status == ServiceStatus.Failed) ? "One or more services need attention" : AnyRunning ? $"{runningCount} {(runningCount == 1 ? "service" : "services")} running" : "All services stopped";
         _globalAction.Content = IconLabel(AnyRunning ? AppIcon.Stop : AppIcon.Play, AnyRunning ? "Stop all" : "Start all");
         AutomationProperties.SetName(_globalAction, AnyRunning ? "Stop all services" : "Start all services");
         _globalAction.IsEnabled = !Busy && snapshot.Services.Any(s => s.Status != ServiceStatus.NotInstalled);
-        _operationText.Text = _shutdown ? "Stopping services before exit…" : _operation ?? (snapshot.IsBusy ? "Working…" : _feedbackMessage ?? "Services continue in tray · Exit from tray menu to stop");
-        _environmentRefresh.Visibility = _section is "Mail Trap" or "Logs" ? Visibility.Collapsed : Visibility.Visible;
-        _errorText.Text = _error; _errorBanner.Visibility = string.IsNullOrWhiteSpace(_error) ? Visibility.Collapsed : Visibility.Visible;
-        foreach (var (key, button) in _navigation) button.Tag = key == _section ? "Selected" : null;
-        UpdateServiceStrip();
+        _globalRestart.Visibility = AnyRunning ? Visibility.Visible : Visibility.Collapsed;
+        _globalRestart.IsEnabled = !Busy && AnyRunning;
+        UpdateOverview();
         var signature = StructureSignature();
         if (_renderedSection != _section || _bodySignature != signature)
         {
             _renderedSection = _section; _bodySignature = signature; _bodyButtons.Clear(); _contentHost.Children.Clear(); _pageActions.Children.Clear(); _phpRows.Clear(); _inlineServices.Clear();
-            _siteRows.Clear(); _sitesStartNotice = null;
-            _mailList = null; _mailSearch = null; _mailPreview = null; _mailResults = null; _mailNoResults = null; _mailDetail = null; _logOutput = null; _releaseContent = null; _releaseVersionPicker = null; _runtimeSelector = null; _pathSetting = null; _startupSetting = null; _startupNotice = null; _defaultPhpPicker = null; _themeButtons.Clear();
+            _siteRows.Clear(); _siteServerControl = null; _restartButtons.Clear();
+            _mailList = null; _mailSearch = null; _mailPreview = null; _mailResults = null; _mailNoResults = null; _mailDetail = null; _logOutput = null; _releaseContent = null; _releaseVersionPicker = null; _runtimeSelector = null; _pathSetting = null; _startupSetting = null; _startupNotice = null; _defaultPhpPicker = null; _appearancePicker = null;
             switch (_section)
             {
+                case "Overview": BuildOverview(); break;
                 case "Sites": BuildSites(); break;
                 case "Caddy": BuildCaddy(); break;
-                case "PHP Versions": BuildPhp(); break;
+                case "PHP": BuildPhp(); break;
                 case "Mail Trap": BuildMail(); break;
                 case "Logs": BuildLogs(); break;
                 case "Updates": BuildInstall(); break;
@@ -270,6 +140,7 @@ internal sealed partial class ManagerWindow : Window
             }
         }
         foreach (var row in _phpRows.Values) UpdatePhpRow(row);
+        UpdateCaddy();
         if (_section == "Sites") UpdateSiteStates();
         foreach (var (kind, row) in _inlineServices)
         {
@@ -281,660 +152,22 @@ internal sealed partial class ManagerWindow : Window
         if (_section == "Settings") UpdateSettings();
         UpdateLogOutput();
         foreach (var registration in _bodyButtons.ToArray()) registration.Button.IsEnabled = registration.Enabled();
+        foreach (var (button, running) in _restartButtons) button.Visibility = running() ? Visibility.Visible : Visibility.Collapsed;
         UpdatePageRefresh();
     }
 
     private string StructureSignature() => _section switch
     {
-        "Sites" => string.Join("|", _snapshot.SiteRoots.Select(p => p.Key + p.Value)) + string.Join("|", _snapshot.Sites) + string.Join("|", _snapshot.Services.Select(s => s.Id + (s.Status != ServiceStatus.NotInstalled))),
-        "Caddy" => string.Join('|', _snapshot.Services.Where(s => s.Kind == ServiceKind.Caddy).Select(s => $"{s.Status}:{s.Version}:{s.Endpoint}:{s.Detail}")) + $":{_snapshot.Sites.Count}:{_snapshot.Sites.Count(site => site.Enabled)}",
-        "PHP Versions" => string.Join("|", _snapshot.Services.Where(s => s.Kind == ServiceKind.FrankenPhp).Select(s => $"{s.Id}:{s.DisplayName}:{s.Status}:{s.Endpoint}")) + string.Join('|', _snapshot.PhpInstallations.Select(p => $"{p.Id}:{p.Version}:{p.Port}")) + _snapshot.DefaultPhpChannel + string.Join('|', _snapshot.RetainedPhpVersions.Select(p => $"{p.Channel}:{p.Version}")),
-        "Mail Trap" => HasRuntime(ServiceKind.Mailpit) + ":" + MailIsRunning + ":" + (_messages.Count > 0),
-        "Settings" => "Settings:" + string.Join('|', _snapshot.PhpInstallations.Select(p => p.Channel)),
-        _ => _section,
+        "Sites" => string.Join("|", _snapshot.Sites.Select(site => site.Hostname)) + string.Join("|", _snapshot.Services.Select(service => service.Id + (service.Status != ServiceStatus.NotInstalled))),
+        "Caddy" => HasRuntime(ServiceKind.Caddy).ToString(),
+        "PHP" => string.Join("|", _snapshot.Services.Where(service => service.Kind is ServiceKind.Php or ServiceKind.FrankenPhp).Select(service => service.Id)),
+        "Mail Trap" => $"{HasRuntime(ServiceKind.Mailpit)}:{MailIsRunning}",
+        "Settings" => string.Join("|", _snapshot.PhpInstallations.Select(item => item.Channel)),
+        _ => string.Empty
     };
 
-    private Button Nav(string key, string label, AppIcon icon)
-    {
-        var button = new Button { Content = IconLabel(icon, label), ToolTip = label, Margin = new Thickness(0, 0, 0, 4), HorizontalContentAlignment = HorizontalAlignment.Left };
-        button.SetResourceReference(StyleProperty, "NavigationButtonStyle"); AutomationProperties.SetName(button, label);
-        button.Click += async (_, _) => await NavigateAsync(key); _navigation[key] = button; return button;
-    }
-
-    private void AddServiceChip(Panel parent, ServiceKind kind, string label, AppIcon icon, string section)
-    {
-        var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        text.Children.Add(T(label, 13, true));
-        var statusRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0) };
-        var dot = new Border { Width = 5, Height = 5, CornerRadius = new CornerRadius(3), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 5, 0) };
-        statusRow.Children.Add(dot); _serviceDots[kind] = dot;
-        var status = T(string.Empty, 11, muted: true); statusRow.Children.Add(status); text.Children.Add(statusRow); _serviceLabels[kind] = status;
-        var button = new Button { Content = text, Padding = new Thickness(12, 8, 50, 8), HorizontalContentAlignment = HorizontalAlignment.Left, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
-        button.SetResourceReference(StyleProperty, "QuietButtonStyle");
-        AutomationProperties.SetName(button, $"Open {label}"); button.Click += async (_, _) => await NavigateAsync(section); _serviceButtons[kind] = button;
-        var chip = new Grid(); chip.Children.Add(button);
-        var toggle = new Button { Content = UiIcon.Create(AppIcon.Play, 15), Width = 40, Height = 40, Padding = new Thickness(0), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
-        toggle.SetResourceReference(StyleProperty, "SecondaryButtonStyle");
-        toggle.Click += async (_, _) => { if (kind == ServiceKind.Php) await ToggleAllPhpAsync(); else await ToggleServiceAsync(kind); };
-        _serviceToggles[kind] = toggle; chip.Children.Add(toggle);
-        var card = Surface(chip, "CardBrush", 10, new Thickness(0)); card.Margin = new Thickness(0, 0, 8, 0); _serviceCards[kind] = card; parent.Children.Add(card);
-    }
-
-    private void UpdateServiceStrip()
-    {
-        foreach (var kind in _serviceLabels.Keys)
-        {
-            var services = _snapshot.Services.Where(s => (s.Kind == kind || kind == ServiceKind.Php && s.Kind == ServiceKind.FrankenPhp) && s.Status != ServiceStatus.NotInstalled).ToArray();
-            var state = services.Length == 0 ? ServiceStatus.NotInstalled : services.Any(s => s.Status == ServiceStatus.Failed) ? ServiceStatus.Failed : services.Any(s => IsTransition(s.Status)) ? ServiceStatus.Starting : services.Any(s => s.Status == ServiceStatus.Running) ? ServiceStatus.Running : ServiceStatus.Stopped;
-            var active = services.Count(s => s.Status == ServiceStatus.Running);
-            _serviceLabels[kind].Text = kind == ServiceKind.Php && services.Length > 0 && state == ServiceStatus.Running
-                ? active == services.Length ? $"{active} running" : $"{active}/{services.Length} running"
-                : kind == ServiceKind.Php && state == ServiceStatus.Stopped ? $"{services.Length} stopped" : StatusLabel(state);
-            var name = kind == ServiceKind.Php ? "PHP" : kind == ServiceKind.Caddy ? "Caddy" : "Mail Trap";
-            AutomationProperties.SetName(_serviceButtons[kind], $"{name}, {_serviceLabels[kind].Text}. Open details");
-            _serviceDots[kind].SetResourceReference(Border.BackgroundProperty, StatusBrush(state));
-            var selected = _section == (kind == ServiceKind.Php ? "PHP Versions" : kind == ServiceKind.Caddy ? "Caddy" : "Mail Trap");
-            _serviceCards[kind].SetResourceReference(Border.BackgroundProperty, selected ? "AccentSoftBrush" : "CardBrush");
-            _serviceCards[kind].SetResourceReference(Border.BorderBrushProperty, selected ? "AccentBrush" : "BorderBrush");
-            var toggle = _serviceToggles[kind]; var running = services.Any(service => service.Status == ServiceStatus.Running);
-            toggle.Content = UiIcon.Create(running ? AppIcon.Stop : AppIcon.Play, 15);
-            toggle.ToolTip = $"{(running ? "Stop" : "Start")} {(kind == ServiceKind.Php ? "all PHP runtimes" : name)}";
-            AutomationProperties.SetName(toggle, toggle.ToolTip.ToString());
-            toggle.IsEnabled = services.Length > 0 && !Busy;
-        }
-    }
-
-    private Task ToggleAllPhpAsync() => RunAsync("Updating PHP runtimes…", async () =>
-    {
-        var runtimes = _snapshot.Services.Where(service => (service.Kind is ServiceKind.Php or ServiceKind.FrankenPhp) && service.Status != ServiceStatus.NotInstalled).ToArray();
-        if (runtimes.Any(service => service.Status == ServiceStatus.Running))
-        {
-            foreach (var runtime in runtimes) await _manager.StopServiceAsync(runtime.Id, _lifetime.Token);
-        }
-        else foreach (var runtime in runtimes) await _manager.StartServiceAsync(runtime.Id, _lifetime.Token);
-    });
-
-    private void BuildPhp()
-    {
-        Heading("PHP runtimes", "Manage the PHP engines available to your sites.");
-        var kind = _runtimeTab ?? (_snapshot.PhpInstallations.Count == 0 && HasRuntime(ServiceKind.FrankenPhp) ? ServiceKind.FrankenPhp : ServiceKind.Php);
-        var engine = kind == ServiceKind.FrankenPhp ? "FrankenPHP" : "PHP NTS";
-        if (HasRuntime(kind)) _pageActions.Children.Add(ActionButton($"Install {engine}", () => OpenInstallAsync(kind), "PrimaryButtonStyle", AppIcon.Plus));
-        var selector = RuntimeSelector("Installed runtime type", kind,
-            [(ServiceKind.Php, "PHP NTS"), (ServiceKind.FrankenPhp, "FrankenPHP")],
-            selected => { _runtimeTab = selected; _renderedSection = null; Render(_snapshot); return Task.CompletedTask; });
-        var rows = new StackPanel();
-        _contentHost.Children.Add(RuntimePage(selector, Scroll(rows)));
-        if (!HasRuntime(kind))
-        {
-            rows.Children.Add(Empty(AppIcon.Terminal, $"No {engine} runtimes installed", "Install an official release or import an extracted Windows distribution.",
-                $"Install {engine}", () => OpenInstallAsync(kind), "Import runtime", () => BrowseRuntimeAsync(kind)));
-            return;
-        }
-        if (kind == ServiceKind.FrankenPhp)
-        {
-            foreach (var runtime in _snapshot.Services.Where(s => s.Kind == kind && s.Status != ServiceStatus.NotInstalled))
-            {
-                var running = runtime.Status == ServiceStatus.Running;
-                var controls = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-                controls.Children.Add(ActionButton(running ? "Stop" : "Start", () => RunAsync("Updating FrankenPHP…", () =>
-                    running ? _manager.StopServiceAsync(runtime.Id, _lifetime.Token) : _manager.StartServiceAsync(runtime.Id, _lifetime.Token)),
-                    "SecondaryButtonStyle", running ? AppIcon.Stop : AppIcon.Play, $"{(running ? "Stop" : "Start")} {runtime.DisplayName}"));
-                controls.Children.Add(MoreButton($"{runtime.DisplayName} actions", () => [
-                    Menu("Restart", () => RunAsync("Restarting FrankenPHP…", () => _manager.RestartServiceAsync(runtime.Id, _lifetime.Token)), running && !Busy),
-                    Menu("Manage extensions…", () => ShowExtensionsAsync(runtime.Id), !Busy),
-                    Menu("Manage sites", () => NavigateAsync("Sites"))]));
-                var labels = new StackPanel(); labels.Children.Add(T(runtime.DisplayName, 14, true));
-                if (runtime.Endpoint is { } endpoint) labels.Children.Add(RuntimeMetadata(endpoint));
-                var status = RuntimeMetadata(StatusLabel(runtime.Status));
-                status.SetResourceReference(TextBlock.ForegroundProperty, StatusBrush(runtime.Status));
-                labels.Children.Add(status);
-                rows.Children.Add(RuntimeRow(labels, controls));
-            }
-            return;
-        }
-        _pageActions.Children.Add(ActionButton("Open config folder", () => OpenPathAsync(Path.Combine(_snapshot.DataDirectory, "user", "php")), "SecondaryButtonStyle", AppIcon.Folder, independent: true));
-        foreach (var installation in _snapshot.PhpInstallations.OrderByDescending(p => Version.TryParse(p.Version, out var version) ? version : new Version()))
-        {
-            var labels = new StackPanel();
-            var title = new WrapPanel();
-            var name = T($"PHP {installation.Channel}", 14, true);
-            name.VerticalAlignment = VerticalAlignment.Center;
-            title.Children.Add(name);
-            if (_snapshot.DefaultPhpChannel == installation.Channel) title.Children.Add(Badge("CLI default", "AccentSoftBrush", new Thickness(6, 0, 0, 0)));
-            labels.Children.Add(title);
-            labels.Children.Add(RuntimeMetadata($"{installation.Version} · 127.0.0.1:{installation.Port}"));
-            var status = RuntimeMetadata(string.Empty);
-            labels.Children.Add(status);
-            var retained = _snapshot.RetainedPhpVersions.Count(version => version.Channel == installation.Channel);
-            if (retained > 0) labels.Children.Add(RuntimeMetadata($"{retained} previous {(retained == 1 ? "patch" : "patches")} available in actions"));
-            var controls = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            var toggle = ActionButton("Start", () => TogglePhpAsync(installation), "SecondaryButtonStyle", AppIcon.Play, $"Start PHP {installation.Channel}"); controls.Children.Add(toggle);
-            controls.Children.Add(MoreButton($"PHP {installation.Channel} actions", () => PhpMenu(installation)));
-            rows.Children.Add(RuntimeRow(labels, controls));
-            _phpRows[installation.Id] = new PhpRow(installation, status, toggle);
-        }
-    }
-
-    private static TextBlock RuntimeMetadata(string text) => T(text, 12, muted: true, margin: new Thickness(0, 4, 0, 0));
-
-    private static Border RuntimeRow(StackPanel labels, StackPanel controls)
-    {
-        var row = new Grid();
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
-        row.ColumnDefinitions.Add(new ColumnDefinition());
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var icon = IconTile(AppIcon.Terminal, 34);
-        icon.HorizontalAlignment = HorizontalAlignment.Left;
-        icon.VerticalAlignment = VerticalAlignment.Center;
-        row.Children.Add(icon);
-        labels.VerticalAlignment = VerticalAlignment.Center;
-        labels.Margin = new Thickness(0, 0, 8, 0);
-        Grid.SetColumn(labels, 1);
-        row.Children.Add(labels);
-        Grid.SetColumn(controls, 2);
-        row.Children.Add(controls);
-        return RowSurface(row);
-    }
-
-    private void UpdatePhpRow(PhpRow row)
-    {
-        var service = PhpService(row.Installation); var running = service?.Status == ServiceStatus.Running;
-        row.Status.Text = service?.Status == ServiceStatus.Failed ? service.Detail ?? "Failed to start" : StatusLabel(service?.Status ?? ServiceStatus.Stopped);
-        row.Status.SetResourceReference(TextBlock.ForegroundProperty, service?.Status == ServiceStatus.Running ? "SuccessBrush" : service?.Status == ServiceStatus.Failed ? "ErrorBrush" : "MutedBrush");
-        row.Toggle.Content = IconLabel(running ? AppIcon.Stop : AppIcon.Play, running ? "Stop" : "Start", 14);
-        AutomationProperties.SetName(row.Toggle, $"{(running ? "Stop" : "Start")} PHP {row.Installation.Channel}");
-    }
-
-    private Task TogglePhpAsync(PhpInstallation installation) => RunAsync($"Updating PHP {installation.Channel}…", async () =>
-    {
-        var service = PhpService(installation) ?? throw new InvalidOperationException("Refresh the runtime list and try again.");
-        if (service.Status == ServiceStatus.Running) await _manager.StopServiceAsync(service.Id, _lifetime.Token); else await _manager.StartServiceAsync(service.Id, _lifetime.Token);
-    });
-
-    private IEnumerable<MenuItem> PhpMenu(PhpInstallation installation)
-    {
-        if (PhpService(installation) is { } service) yield return Menu("Restart", () => RunAsync($"Restarting PHP {installation.Channel}…", () => _manager.RestartServiceAsync(service.Id, _lifetime.Token)), !Busy);
-        if (_snapshot.DefaultPhpChannel != installation.Channel) yield return Menu("Use as CLI default", () => RunAsync("Changing default PHP…", () => _manager.SetDefaultPhpAsync(installation.Channel, _lifetime.Token)), !Busy);
-        yield return Menu("Check for updates…", () => OpenPhpUpdatesAsync(installation.Channel), !Busy);
-        var retained = _snapshot.RetainedPhpVersions.Where(version => version.Channel == installation.Channel)
-            .OrderByDescending(version => ParsePhpVersion(version.Version)).ToArray();
-        if (retained.Length > 0)
-        {
-            var versions = new MenuItem { Header = "Previous patches", IsEnabled = !Busy };
-            AutomationProperties.SetName(versions, $"Previous patches for PHP {installation.Channel}");
-            foreach (var version in retained)
-            {
-                var option = Menu($"Switch to PHP {version.Version}", () => SwitchPhpVersionAsync(version), !Busy);
-                option.ToolTip = "Keep this channel's port, extensions, and CLI selection. A running channel briefly restarts.";
-                versions.Items.Add(option);
-            }
-            yield return versions;
-        }
-        yield return Menu("Manage extensions…", () => ShowExtensionsAsync(installation.Channel), !Busy);
-        yield return Menu("Edit PHP configuration", () => OpenEditorAsync(Path.Combine(_snapshot.DataDirectory, "user", "php", installation.Channel, "conf.d", "20-custom.ini")));
-        yield return Menu("Open runtime folder", () => OpenPathAsync(installation.Directory));
-    }
-
-    private void BuildCaddy()
-    {
-        Heading("Caddy", "Control the local web server and check what it serves.");
-        var proxy = _snapshot.Services.FirstOrDefault(service => service.Kind == ServiceKind.Caddy && service.Status != ServiceStatus.NotInstalled);
-        if (proxy is null)
-        {
-            _contentHost.Children.Add(Empty(AppIcon.Server, "Caddy is not installed", "Install Caddy to serve your local sites over HTTPS.",
-                "Install Caddy", () => OpenInstallAsync(ServiceKind.Caddy), "Import Caddy", () => BrowseRuntimeAsync(ServiceKind.Caddy)));
-            return;
-        }
-
-        var rows = new StackPanel();
-        var details = new StackPanel();
-        details.Children.Add(T(proxy.Version is { Length: > 0 } version ? $"Caddy {version}" : "Web server", 16, true));
-        var status = RuntimeMetadata(StatusLabel(proxy.Status));
-        status.SetResourceReference(TextBlock.ForegroundProperty, StatusBrush(proxy.Status));
-        details.Children.Add(status);
-        if (proxy.Endpoint is { Length: > 0 } endpoint) details.Children.Add(RuntimeMetadata(endpoint));
-        var enabledCount = _snapshot.Sites.Count(site => site.Enabled);
-        details.Children.Add(RuntimeMetadata($"{enabledCount} of {_snapshot.Sites.Count} sites enabled in configuration"));
-        if (proxy.Status == ServiceStatus.Failed && proxy.Detail is { Length: > 0 } failure) details.Children.Add(RuntimeMetadata(failure));
-        var running = proxy.Status == ServiceStatus.Running;
-        if (!running && enabledCount == 0)
-            details.Children.Add(RuntimeMetadata("Add or enable a site before starting Caddy."));
-        var actions = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) };
-        actions.Children.Add(ActionButton(running ? "Stop Caddy" : "Start Caddy", () => ToggleServiceAsync(ServiceKind.Caddy),
-            "SecondaryButtonStyle", running ? AppIcon.Stop : AppIcon.Play, enabled: () => !Busy && (running || enabledCount > 0)));
-        actions.Children.Add(ActionButton("Manage sites", () => NavigateAsync("Sites"), "SecondaryButtonStyle", AppIcon.Sites, independent: true));
-        details.Children.Add(actions);
-        rows.Children.Add(RowSurface(details));
-
-        var troubleshooting = new StackPanel();
-        troubleshooting.Children.Add(T("Configuration and logs", 14, true));
-        troubleshooting.Children.Add(RuntimeMetadata("Starting Caddy validates the configuration. Stopping it takes local sites offline."));
-        var links = new WrapPanel { Margin = new Thickness(0, 12, 0, 0) };
-        links.Children.Add(ActionButton("Edit workspace settings", () => OpenEditorAsync(Path.Combine(_snapshot.DataDirectory, "settings.json")), "SecondaryButtonStyle", AppIcon.Edit));
-        links.Children.Add(ActionButton("View activity", () => NavigateAsync("Logs"), "SecondaryButtonStyle", AppIcon.Logs, independent: true));
-        troubleshooting.Children.Add(links);
-        rows.Children.Add(RowSurface(troubleshooting));
-        _contentHost.Children.Add(Scroll(rows));
-    }
-
-
-    private void BuildMail()
-    {
-        Heading("Mail Trap", "A safe inbox for development mail.");
-        if (MailIsRunning) AddUpdateControl();
-        if (MailIsRunning) _pageActions.Children.Add(ActionButton("", CopySmtpAsync, "IconButtonStyle", AppIcon.Copy, "Copy SMTP settings", independent: true));
-        if (!HasRuntime(ServiceKind.Mailpit))
-        {
-            _contentHost.Children.Add(Empty(AppIcon.Mail, "Keep test email close", "Capture messages from your apps in a local inbox, without sending them to real recipients.", "Install Mailpit", () => OpenInstallAsync(ServiceKind.Mailpit), "Import Mailpit", () => BrowseRuntimeAsync(ServiceKind.Mailpit)));
-            return;
-        }
-        var outer = new Grid(); outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); outer.RowDefinitions.Add(new RowDefinition());
-        outer.Children.Add(ServiceControl(ServiceKind.Mailpit, $"SMTP 127.0.0.1:{_snapshot.SmtpPort}"));
-        if (!MailIsRunning)
-        {
-            var stopped = Empty(AppIcon.Mail, "Mail Trap is stopped", "Start Mail Trap to capture and read development email. Previously captured messages stay stored.", "Start Mail Trap", StartMailAsync, "Copy SMTP settings", CopySmtpAsync, primaryIcon: AppIcon.Play);
-            Grid.SetRow(stopped, 1); outer.Children.Add(stopped);
-        }
-        else if (_messages.Count == 0)
-        {
-            var empty = Empty(AppIcon.Mail, "Your inbox is clear", $"Send a test message to 127.0.0.1:{_snapshot.SmtpPort}. New messages appear automatically.", "Copy SMTP settings", CopySmtpAsync, primaryIcon: AppIcon.Copy); Grid.SetRow(empty, 1); outer.Children.Add(empty);
-        }
-        else
-        {
-            var inbox = new Grid { Margin = new Thickness(0, 1, 0, 0) }; inbox.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) }); inbox.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1) }); inbox.ColumnDefinitions.Add(new ColumnDefinition());
-            inbox.RowDefinitions.Add(new RowDefinition()); inbox.RowDefinitions.Add(new RowDefinition { Height = new GridLength(0) });
-            var listArea = new Grid { Margin = new Thickness(0, 0, 13, 0) }; listArea.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); listArea.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); listArea.RowDefinitions.Add(new RowDefinition());
-            var searchInput = new Grid { Margin = new Thickness(0, 0, 0, 9) };
-            _mailSearch = new TextBox { ToolTip = "Search subject or sender", Padding = new Thickness(33, 8, 10, 8), MinHeight = 40 };
-            AutomationProperties.SetName(_mailSearch, "Search captured messages"); searchInput.Children.Add(_mailSearch);
-            AutomationProperties.SetHelpText(_mailSearch, "Search subject or sender. Press Control F to focus search.");
-            var searchIcon = UiIcon.Create(AppIcon.Search, 15, "MutedBrush"); searchIcon.HorizontalAlignment = HorizontalAlignment.Left; searchIcon.VerticalAlignment = VerticalAlignment.Center; searchIcon.Margin = new Thickness(11, 0, 0, 0); searchIcon.IsHitTestVisible = false; searchInput.Children.Add(searchIcon);
-            var placeholder = T("Search mail", 12, muted: true, margin: new Thickness(33, 0, 0, 0)); placeholder.VerticalAlignment = VerticalAlignment.Center; placeholder.IsHitTestVisible = false; searchInput.Children.Add(placeholder);
-            _mailSearch.TextChanged += (_, _) => { placeholder.Visibility = _mailSearch.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed; FillMailList(); };
-            listArea.Children.Add(searchInput);
-            _mailResults = T(string.Empty, 11, muted: true, margin: new Thickness(0, 0, 0, 7));
-            AutomationProperties.SetLiveSetting(_mailResults, AutomationLiveSetting.Polite);
-            Grid.SetRow(_mailResults, 1); listArea.Children.Add(_mailResults);
-            _mailList = new ListBox { BorderThickness = new Thickness(0), Background = Brushes.Transparent, HorizontalContentAlignment = HorizontalAlignment.Stretch };
-            ScrollViewer.SetHorizontalScrollBarVisibility(_mailList, ScrollBarVisibility.Disabled);
-            AutomationProperties.SetName(_mailList, "Captured messages"); _mailList.SelectionChanged += async (_, _) =>
-            {
-                if (_updatingInputs || _mailList.SelectedItem is not ListBoxItem { Tag: MailMessageSummary selected }) return;
-                await ReadMessageAsync(selected);
-            };
-            Grid.SetRow(_mailList, 2); listArea.Children.Add(_mailList);
-            var noResults = new StackPanel { VerticalAlignment = VerticalAlignment.Top };
-            noResults.Children.Add(T("No matching messages", 13, true));
-            noResults.Children.Add(T("Try another subject or sender, or clear your search.", 12, muted: true, margin: new Thickness(0, 6, 0, 12)));
-            var clearSearch = ActionButton("Clear search", () => { if (_mailSearch is not null) { _mailSearch.Clear(); _mailSearch.Focus(); } return Task.CompletedTask; }, "SecondaryButtonStyle", independent: true);
-            clearSearch.HorizontalAlignment = HorizontalAlignment.Left; noResults.Children.Add(clearSearch);
-            _mailNoResults = new Border { Child = noResults, Padding = new Thickness(6, 12, 6, 0), Visibility = Visibility.Collapsed };
-            Grid.SetRow(_mailNoResults, 2); listArea.Children.Add(_mailNoResults); inbox.Children.Add(listArea);
-            var separator = new Border(); separator.SetResourceReference(Border.BackgroundProperty, "DividerBrush"); Grid.SetColumn(separator, 1); inbox.Children.Add(separator);
-            var detail = new Grid { Margin = new Thickness(17, 0, 0, 0) }; detail.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); detail.RowDefinitions.Add(new RowDefinition());
-            _mailDetail = detail;
-            var messageHeader = new StackPanel { Margin = new Thickness(0, 0, 0, 13) }; _mailSubject = T("Select a message", 16, true); _mailMetadata = T(string.Empty, 11, muted: true, margin: new Thickness(0, 7, 0, 0)); messageHeader.Children.Add(_mailSubject); messageHeader.Children.Add(_mailMetadata); detail.Children.Add(messageHeader);
-            _mailPreview = new TextBox { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, BorderThickness = new Thickness(0), Padding = new Thickness(0), Background = Brushes.Transparent, Text = _mailText };
-            AutomationProperties.SetName(_mailPreview, "Message plain-text content"); Grid.SetRow(_mailPreview, 1); detail.Children.Add(_mailPreview); Grid.SetColumn(detail, 2); inbox.Children.Add(detail); Grid.SetRow(inbox, 1); outer.Children.Add(inbox);
-            inbox.SizeChanged += (_, _) =>
-            {
-                var narrow = inbox.ActualWidth < 600;
-                // Preserve the desktop master/detail layout at the supported minimum width.
-                inbox.ColumnDefinitions[0].Width = new GridLength(narrow ? 160 : 220);
-                listArea.Margin = new Thickness(0, 0, narrow ? 8 : 13, 0);
-                detail.Margin = new Thickness(narrow ? 10 : 17, 0, 0, 0);
-            };
-            FillMailList();
-        }
-        _contentHost.Children.Add(outer);
-    }
-
-    private void FillMailList()
-    {
-        if (_mailList is null) return;
-        var scroller = FindScrollViewer(_mailList);
-        var offset = scroller?.VerticalOffset ?? 0;
-        _updatingInputs = true;
-        _mailList.Items.Clear(); var query = _mailSearch?.Text.Trim() ?? string.Empty;
-        foreach (var message in _messages.Where(m => m.Subject.Contains(query, StringComparison.OrdinalIgnoreCase) || m.From.Contains(query, StringComparison.OrdinalIgnoreCase)))
-        {
-            var content = new StackPanel { Margin = new Thickness(7, 9, 7, 9) };
-            var subject = T(message.Subject, 12, true); subject.TextWrapping = TextWrapping.NoWrap; subject.TextTrimming = TextTrimming.CharacterEllipsis; subject.ToolTip = message.Subject; content.Children.Add(subject);
-            var sender = T(message.From, 11, muted: true, margin: new Thickness(0, 4, 0, 0)); sender.TextWrapping = TextWrapping.NoWrap; sender.TextTrimming = TextTrimming.CharacterEllipsis; sender.ToolTip = message.From; content.Children.Add(sender);
-            content.Children.Add(T(message.Created.LocalDateTime.ToString("g"), 11, muted: true, margin: new Thickness(0, 4, 0, 0)));
-            var item = new ListBoxItem { Content = content, Tag = message, HorizontalContentAlignment = HorizontalAlignment.Stretch }; AutomationProperties.SetName(item, $"{message.Subject}, from {message.From}"); _mailList.Items.Add(item);
-            if (message.Id == _selectedMessageId) _mailList.SelectedItem = item;
-        }
-        _updatingInputs = false;
-        if (_mailResults is not null) _mailResults.Text = query.Length == 0 ? $"{_messages.Count} {(_messages.Count == 1 ? "message" : "messages")}" : $"{_mailList.Items.Count} of {_messages.Count} messages";
-        var noMatches = _mailList.Items.Count == 0;
-        if (_mailNoResults is not null) _mailNoResults.Visibility = noMatches ? Visibility.Visible : Visibility.Collapsed;
-        if (_mailDetail is not null) _mailDetail.Visibility = noMatches ? Visibility.Collapsed : Visibility.Visible;
-        _mailList.Visibility = noMatches ? Visibility.Collapsed : Visibility.Visible;
-        _renderedMessages = _messages;
-        scroller?.ScrollToVerticalOffset(offset);
-        if (_selectedMessageId is { } id && _messages.FirstOrDefault(m => m.Id == id) is { } selected) SetMessageHeader(selected);
-    }
-
-    private async Task ReadMessageAsync(MailMessageSummary message, CancellationToken refreshToken = default)
-    {
-        _selectedMessageId = message.Id; SetMessageHeader(message);
-        if (_loadedMessageId != message.Id) { _mailText = string.Empty; _loadedMessageId = null; }
-        _messageCancellation?.Cancel(); _messageCancellation?.Dispose();
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, refreshToken); _messageCancellation = cancellation;
-        if (_mailPreview is not null) _mailPreview.Text = "Loading message…";
-        try
-        {
-            var text = await _manager.GetMessageTextAsync(message.Id, cancellation.Token);
-            if (!cancellation.IsCancellationRequested && _selectedMessageId == message.Id) { _mailText = text; _loadedMessageId = message.Id; if (_mailPreview is not null) _mailPreview.Text = text; }
-        }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
-        catch (Exception exception)
-        {
-            if (_selectedMessageId == message.Id && _mailPreview is not null) _mailPreview.Text = "This message could not be loaded. Select another message, then select this message to try again. Check Activity if the problem continues.";
-            if (refreshToken.CanBeCanceled) throw;
-            ShowError(exception.Message);
-        }
-        finally { if (ReferenceEquals(_messageCancellation, cancellation)) _messageCancellation = null; }
-    }
-
-    private void SetMessageHeader(MailMessageSummary message)
-    {
-        if (_mailSubject is not null) _mailSubject.Text = message.Subject;
-        if (_mailMetadata is not null) _mailMetadata.Text = $"From  {message.From}\nTo  {message.To}\n{message.Created.LocalDateTime:g}";
-    }
-
-    private IEnumerable<MenuItem> MailMenu()
-    {
-        if (_snapshot.Services.FirstOrDefault(s => s.Kind == ServiceKind.Mailpit && s.Status != ServiceStatus.NotInstalled) is { } mail)
-        {
-            yield return Menu(mail.Status == ServiceStatus.Running ? "Stop Mail Trap" : "Start Mail Trap", () => ToggleServiceAsync(ServiceKind.Mailpit), !Busy);
-            yield return Menu("Restart Mail Trap", () => RunAsync("Restarting Mail Trap…", async () => { await _manager.RestartServiceAsync(mail.Id, _lifetime.Token); await ReadInboxCoreAsync(); }), !Busy);
-        }
-        else yield return Menu("Install Mailpit…", () => OpenInstallAsync(ServiceKind.Mailpit), !Busy);
-        yield return Menu("Copy SMTP settings", CopySmtpAsync);
-        yield return Menu("Import Mailpit…", () => BrowseRuntimeAsync(ServiceKind.Mailpit), !Busy);
-    }
-
-    private Task CopySmtpAsync() => CopyTextAsync($"Host: 127.0.0.1\nPort: {_snapshot.SmtpPort}\nEncryption: None\nAuthentication: None", "SMTP settings copied to clipboard.");
-
-    private Task CopyTextAsync(string text, string confirmation)
-    {
-        Clipboard.SetText(text); _feedbackMessage = confirmation; Render(_snapshot); return Task.CompletedTask;
-    }
-
-    private void BuildLogs()
-    {
-        Heading("Activity", "Recent events from your environment.");
-        AddUpdateControl();
-        _pageActions.Children.Add(ActionButton("Open logs folder", () => OpenPathAsync(Path.Combine(_snapshot.DataDirectory, "logs")), "SecondaryButtonStyle", AppIcon.Folder, "Open log folder", independent: true));
-        _logOutput = new TextBox { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, FontFamily = new FontFamily("Cascadia Mono, Consolas"), FontSize = 12, Padding = new Thickness(16), BorderThickness = new Thickness(0) };
-        AutomationProperties.SetName(_logOutput, "Recent application log"); _logOutput.SetResourceReference(Control.BackgroundProperty, "CardBrush"); _contentHost.Children.Add(Surface(_logOutput, "CardBrush", 9, new Thickness(0)));
-    }
-
-    private void BuildInstall()
-    {
-        Heading(_releasePhpChannel is { } channel ? $"Update PHP {channel}" : "Install runtimes", "Official releases. Verified before they run.");
-        var selector = RuntimeSelector("Runtime type to install", _releasePhpChannel is null ? _releaseKind : null,
-            [(ServiceKind.Php, "PHP NTS"), (ServiceKind.FrankenPhp, "FrankenPHP"), (ServiceKind.Caddy, "Caddy"), (ServiceKind.Mailpit, "Mailpit")],
-            async kind =>
-            {
-                ResetReleaseSelection(kind);
-                Render(_snapshot);
-                await CheckReleasesAsync();
-            });
-        _releaseContent = new ContentControl { Padding = new Thickness(0) };
-        _contentHost.Children.Add(RuntimePage(selector, Surface(_releaseContent, "CardBrush", 10, new Thickness(0))));
-        _releaseSignature = string.Empty;
-    }
-
-    private ListBox RuntimeSelector(string name, ServiceKind? selected, (ServiceKind Kind, string Label)[] kinds, Func<ServiceKind, Task> change)
-    {
-        var selector = new ListBox();
-        selector.SetResourceReference(StyleProperty, "RuntimeSelectorStyle");
-        AutomationProperties.SetName(selector, name);
-        foreach (var (kind, label) in kinds)
-        {
-            var item = new ListBoxItem { Content = label, Tag = kind };
-            selector.Items.Add(item);
-            if (kind == selected) selector.SelectedItem = item;
-        }
-        selector.SelectionChanged += async (_, _) =>
-        {
-            if (selector.SelectedItem is not ListBoxItem { Tag: ServiceKind kind }) return;
-            var hadFocus = selector.IsKeyboardFocusWithin;
-            var pending = change(kind);
-            if (hadFocus && _runtimeSelector is { SelectedItem: ListBoxItem current } replacement && replacement != selector)
-                current.Focus();
-            await pending;
-        };
-        return _runtimeSelector = selector;
-    }
-
-    private static Grid RuntimePage(ListBox selector, UIElement content)
-    {
-        var page = new Grid();
-        page.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        page.RowDefinitions.Add(new RowDefinition());
-        page.Children.Add(selector);
-        Grid.SetRow(content, 1);
-        page.Children.Add(content);
-        return page;
-    }
-
-    private void UpdateInstall()
-    {
-        if (_releaseContent is null) return;
-        var signature = $"{_releaseKind}:{_releasePhpChannel}:{_releaseCheck is not null}:{_releaseCheckComplete}:{_selectedReleaseId}:{_releaseError}:{string.Join('|', _releases.Select(r => r.Id))}:{string.Join('|', _snapshot.PhpInstallations.Select(p => $"{p.Channel}:{p.Version}"))}:{HasRuntime(ServiceKind.Mailpit)}:{string.Join(',', _snapshot.Services.Where(s => s.Status != ServiceStatus.NotInstalled).Select(s => s.Id))}";
-        if (_releaseSignature != signature)
-        {
-            _releaseSignature = signature; _downloadPanel = null;
-            var restoreVersionFocus = _releaseVersionPicker?.IsKeyboardFocusWithin == true;
-            _releaseVersionPicker = null;
-            _bodyButtons.RemoveAll(registration => Equals(registration.Button.Tag, "ReleaseStage"));
-            var page = new StackPanel();
-            if (_releaseError is { Length: > 0 }) page.Children.Add(_visualCppRetryId == _selectedReleaseId && _releases.FirstOrDefault(r => r.Id == _visualCppRetryId) is { } retry
-                ? InlineNotice(_releaseError, "Install Visual C++ x64 and retry", () => InstallSelectedReleaseAsync(retry, true))
-                : InlineNotice(_releaseError));
-            if (_releaseCheck is not null)
-            {
-                var loading = new StackPanel { Margin = new Thickness(18) };
-                var title = T($"Looking up {ReleaseTypeName()} releases…", 16, true);
-                AutomationProperties.SetLiveSetting(title, AutomationLiveSetting.Polite);
-                loading.Children.Add(title);
-                loading.Children.Add(RuntimeMetadata("Contacting the official publisher. You can switch runtime types or import an extracted runtime while you wait."));
-                var bar = new ProgressBar { IsIndeterminate = true, Margin = new Thickness(0, 14, 0, 12) };
-                AutomationProperties.SetName(bar, "Looking up releases");
-                loading.Children.Add(bar);
-                var actions = new WrapPanel();
-                actions.Children.Add(ActionButton("Cancel lookup", () => { CancelReleaseCheck(); Render(_snapshot); return Task.CompletedTask; }, "SecondaryButtonStyle", independent: true));
-                actions.Children.Add(ActionButton("Import extracted runtime…", () => BrowseRuntimeAsync(_releaseKind), "QuietButtonStyle", AppIcon.Folder));
-                loading.Children.Add(actions);
-                page.Children.Add(loading);
-            }
-            else if (_releases.Count == 0)
-            {
-                var type = ReleaseTypeName();
-                var failed = !string.IsNullOrWhiteSpace(_releaseError);
-                page.Children.Add(Empty(AppIcon.Download, failed ? "Could not load releases" : _releaseCheckComplete ? "No compatible releases found" : $"Add {type} to your workspace", failed ? "Check your connection and try again, or import an extracted runtime." : _releaseCheckComplete ? "Refresh the release list or import a downloaded distribution." : "Choose a release from the official publisher. Nothing downloads until you install.", failed ? "Retry release check" : _releaseCheckComplete ? "Refresh releases" : $"Find {type} releases", CheckReleasesAsync, "Import a downloaded runtime", () => BrowseRuntimeAsync(_releaseKind)));
-            }
-            else
-            {
-                var selected = _releases.FirstOrDefault(r => r.Id == _selectedReleaseId) ?? _releases[0]; _selectedReleaseId = selected.Id;
-                var card = new StackPanel();
-                var head = new DockPanel(); var refresh = ActionButton("", CheckReleasesAsync, "IconButtonStyle", AppIcon.Refresh, "Refresh official releases"); DockPanel.SetDock(refresh, Dock.Right); head.Children.Add(refresh); head.Children.Add(T("Choose a version", 14, true)); card.Children.Add(head);
-                var versions = new ComboBox { ItemsSource = _releases, DisplayMemberPath = nameof(RuntimeRelease.DisplayName), SelectedItem = selected, Margin = new Thickness(0, 12, 0, 14), MinHeight = 40 };
-                _releaseVersionPicker = versions;
-                AutomationProperties.SetName(versions, "Official version to install"); versions.SelectionChanged += (_, _) => { if (versions.SelectedItem is RuntimeRelease release && release.Id != _selectedReleaseId) { _selectedReleaseId = release.Id; _installProgress = null; Render(_snapshot); } }; card.Children.Add(versions);
-                var retained = RetainedPhpFor(selected);
-                var trust = IconLabel(retained is null ? AppIcon.Check : AppIcon.Folder, retained is null ? $"Official source · {selected.DownloadUri.Host}" : "Retained locally · no download", 14); trust.Margin = new Thickness(0, 0, 0, 7); card.Children.Add(trust);
-                trust.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "TextBrush");
-                card.Children.Add(T(retained is null ? selected.IntegrityDescription ?? "Publisher verification is required before installation." : "The saved binaries and current configuration are validated before activation.", 11, muted: true));
-                if (InstalledPhpFor(selected) is { } installed)
-                {
-                    card.Children.Add(T($"Active PHP {installed.Version}  ·  Selected PHP {PhpPatch(selected.Version)}", 12, true, margin: new Thickness(0, 15, 0, 0)));
-                    if (PhpPatch(selected.Version) != installed.Version)
-                    {
-                        card.Children.Add(T("Port, extensions, and CLI selection stay with this channel. The current patch is kept for rollback.", 11, muted: true, margin: new Thickness(0, 8, 0, 0)));
-                        card.Children.Add(T("Running PHP briefly restarts; stopped channels stay stopped. If activation fails, the manager attempts to restore the previous patch.", 11, muted: true, margin: new Thickness(0, 8, 0, 0)));
-                    }
-                }
-                var reason = InstallationBlockReason(selected);
-                if (reason is not null) card.Children.Add(T(reason, 12, muted: true, margin: new Thickness(0, 12, 0, 0)));
-                var install = ActionButton(reason is null ? InstallActionLabel(selected) : HasInstallationFor(selected) ? "Already installed" : "Unavailable", retained is null ? () => InstallSelectedReleaseAsync(selected) : () => SwitchPhpVersionAsync(retained), "PrimaryButtonStyle", retained is null ? AppIcon.Download : AppIcon.Restart, enabled: () => !Busy && InstallationBlockReason(selected) is null); install.HorizontalAlignment = HorizontalAlignment.Left; install.Margin = new Thickness(0, 20, 0, 0); card.Children.Add(install);
-                page.Children.Add(new Border { Child = card, Padding = new Thickness(18) });
-                page.Children.Add(T(_releaseKind == ServiceKind.Php ? "Switch to a retained patch from the PHP runtime's actions menu." : _releaseKind == ServiceKind.FrankenPhp ? "Each installed version is available in Sites." : "Import an extracted distribution or install a verified release.", 11, muted: true, margin: new Thickness(1, 12, 0, 0)));
-                var import = ActionButton("Import extracted runtime…", () => BrowseRuntimeAsync(_releaseKind), "QuietButtonStyle", AppIcon.Folder);
-                import.HorizontalAlignment = HorizontalAlignment.Left;
-                import.Margin = new Thickness(0, 8, 0, 0);
-                page.Children.Add(import);
-            }
-            var progress = new StackPanel(); _installPhase = T(string.Empty, 12, true); AutomationProperties.SetLiveSetting(_installPhase, AutomationLiveSetting.Polite); progress.Children.Add(_installPhase);
-            _downloadBar = new ProgressBar { Minimum = 0, Maximum = 100, Height = 5, Margin = new Thickness(0, 10, 0, 8) }; AutomationProperties.SetName(_downloadBar, "Installation progress"); progress.Children.Add(_downloadBar); _installBytes = T(string.Empty, 10, muted: true); progress.Children.Add(_installBytes);
-            _cancelDownload = ActionButton("Cancel download", () => { _installCancellation?.Cancel(); return Task.CompletedTask; }, "QuietButtonStyle", independent: true); _cancelDownload.HorizontalAlignment = HorizontalAlignment.Left; _cancelDownload.Margin = new Thickness(0, 6, 0, 0); progress.Children.Add(_cancelDownload);
-            _downloadPanel = Surface(progress, "CardBrush", 9, new Thickness(15)); _downloadPanel.Margin = new Thickness(0, 14, 0, 0); page.Children.Add(_downloadPanel);
-            _releaseContent.Content = Scroll(page);
-            if (restoreVersionFocus) _releaseVersionPicker?.Focus();
-        }
-        if (_downloadPanel is not null)
-        {
-            _downloadPanel.Visibility = _installProgress is null ? Visibility.Collapsed : Visibility.Visible;
-            if (_installProgress is { } progress)
-            {
-                _installPhase!.Text = progress.Phase;
-                _downloadBar!.IsIndeterminate = _installCancellation is not null && progress.TotalBytes is not > 0;
-                _downloadBar.Value = progress.TotalBytes is > 0 ? Math.Clamp(progress.BytesReceived * 100d / progress.TotalBytes.Value, 0, 100) : 0;
-                _installBytes!.Text = progress.TotalBytes is > 0 ? $"{FormatBytes(progress.BytesReceived)} of {FormatBytes(progress.TotalBytes.Value)}" : progress.BytesReceived > 0 ? $"{FormatBytes(progress.BytesReceived)} downloaded" : string.Empty;
-                _cancelDownload!.Visibility = _installCancellation is null ? Visibility.Collapsed : Visibility.Visible;
-            }
-        }
-        if (_releaseVersionPicker is not null) _releaseVersionPicker.IsEnabled = !Busy;
-        if (_runtimeSelector is not null) _runtimeSelector.IsEnabled = !Busy;
-    }
-
-    private string ReleaseTypeName() => _releaseKind switch
-    {
-        ServiceKind.Php => _releasePhpChannel is { } channel ? $"PHP {channel}" : "PHP NTS",
-        ServiceKind.FrankenPhp => "FrankenPHP",
-        _ => _releaseKind.ToString()
-    };
-
-    private void BuildSettings()
-    {
-        Heading("Settings", "Appearance, startup, command-line PHP and workspace files.");
-        var settings = new StackPanel();
-        var appearance = new StackPanel(); appearance.Children.Add(T("Appearance", 14, true)); appearance.Children.Add(T("Choose a theme or follow Windows.", 11, muted: true, margin: new Thickness(0, 5, 0, 14)));
-        var themes = new UniformGrid { Columns = 3 };
-        foreach (var (theme, icon, label) in new[] { (ThemePreference.System, AppIcon.Monitor, "System"), (ThemePreference.Light, AppIcon.Sun, "Light"), (ThemePreference.Dark, AppIcon.Moon, "Dark") })
-        {
-            var button = ActionButton(label, () => RunAsync("Changing appearance…", () => _manager.SetThemeAsync(theme, _lifetime.Token)), "SecondaryButtonStyle", icon, $"Use {label.ToLowerInvariant()} theme"); button.Margin = new Thickness(0, 0, theme == ThemePreference.Dark ? 0 : 7, 0); themes.Children.Add(button); _themeButtons[theme] = button;
-        }
-        appearance.Children.Add(themes); var appearanceSurface = Surface(appearance, "CardBrush", 10, new Thickness(17)); appearanceSurface.Margin = new Thickness(0, 0, 0, 12); settings.Children.Add(appearanceSurface);
-        var startup = new StackPanel(); startup.Children.Add(T("Startup", 14, true));
-        startup.Children.Add(T("Start services in the system tray when you sign in to Windows. The window stays closed.", 11, muted: true, margin: new Thickness(0, 5, 0, 10)));
-        _startupSetting = new CheckBox { Content = "Start PHP DevTray with Windows", IsEnabled = false };
-        AutomationProperties.SetName(_startupSetting, "Start PHP DevTray with Windows");
-        _startupSetting.Click += async (_, _) =>
-        {
-            if (_updatingInputs || _startupChanging) return;
-            var enabled = _startupSetting.IsChecked == true;
-            _startupChanging = true;
-            try { await RunAsync("Updating Windows startup…", async () => _startupState = await _startupRegistration.SetEnabledAsync(enabled)); }
-            finally { _startupChanging = false; UpdateSettings(); }
-        };
-        startup.Children.Add(_startupSetting);
-        _startupNotice = T("", 11, muted: true, margin: new Thickness(0, 5, 0, 0)); startup.Children.Add(_startupNotice);
-        var windowsStartup = ActionButton("Windows startup settings", () => OpenPathAsync("ms-settings:startupapps"), "SecondaryButtonStyle", AppIcon.ExternalLink, independent: true);
-        windowsStartup.HorizontalAlignment = HorizontalAlignment.Left;
-        windowsStartup.Margin = new Thickness(0, 8, 0, 0);
-        startup.Children.Add(windowsStartup);
-        var startupSurface = Surface(startup, "CardBrush", 10, new Thickness(17)); startupSurface.Margin = new Thickness(0, 0, 0, 12); settings.Children.Add(startupSurface);
-        _ = ReadStartupSettingAsync();
-        var cli = new StackPanel(); cli.Children.Add(T("Command-line PHP", 14, true)); cli.Children.Add(T("Use your selected PHP version in new terminal sessions.", 11, muted: true, margin: new Thickness(0, 5, 0, 13)));
-        if (_snapshot.PhpInstallations.Count > 0)
-        {
-            var row = new DockPanel(); var label = T("Default version", 12); label.VerticalAlignment = VerticalAlignment.Center; row.Children.Add(label);
-            _defaultPhpPicker = new ComboBox { ItemsSource = _snapshot.PhpInstallations.Select(p => p.Channel).Distinct().ToArray(), SelectedItem = _snapshot.DefaultPhpChannel, Width = 100, HorizontalAlignment = HorizontalAlignment.Right };
-            AutomationProperties.SetName(_defaultPhpPicker, "Default command-line PHP version"); _defaultPhpPicker.SelectionChanged += async (_, _) => { if (!_updatingInputs && _defaultPhpPicker.SelectedItem is string channel && channel != _snapshot.DefaultPhpChannel) await RunAsync("Changing default PHP…", () => _manager.SetDefaultPhpAsync(channel, _lifetime.Token)); }; row.Children.Add(_defaultPhpPicker); cli.Children.Add(row);
-        }
-        else cli.Children.Add(T("Install PHP to choose a command-line version.", 12, muted: true));
-        if (AppDeployment.IsPackaged)
-        {
-            cli.Children.Add(T("Windows provides the php command through an app execution alias. Manage it in Windows Settings if another PHP installation uses the same command.", 11, muted: true, margin: new Thickness(0, 11, 0, 8)));
-            cli.Children.Add(ActionButton("Manage command alias", () => OpenPathAsync("ms-settings:appsfeatures-appexecutionalias"), "QuietButtonStyle", independent: true));
-        }
-        else
-        {
-            _pathSetting = new CheckBox { Content = "Make PHP available in terminals", Margin = new Thickness(0, 11, 0, 0), IsChecked = _snapshot.PathIntegrationEnabled };
-            AutomationProperties.SetName(_pathSetting, "Enable PHP in the user PATH"); _pathSetting.Click += async (_, _) => { if (!_updatingInputs) { var enabled = _pathSetting.IsChecked == true; await RunAsync("Updating terminal integration…", () => _manager.SetPathIntegrationAsync(enabled, _lifetime.Token)); } }; cli.Children.Add(_pathSetting);
-        }
-        settings.Children.Add(Surface(cli, "CardBrush", 10, new Thickness(17)));
-        var storage = new DockPanel { Margin = new Thickness(1, 19, 0, 0) }; var folder = ActionButton("Open folder", () => OpenPathAsync(_snapshot.DataDirectory), "QuietButtonStyle", AppIcon.Folder, independent: true); DockPanel.SetDock(folder, Dock.Right); storage.Children.Add(folder); var storageText = new StackPanel(); storageText.Children.Add(T("Workspace files", 12, true)); var path = T(_snapshot.DataDirectory, 10, muted: true, margin: new Thickness(0, 5, 0, 0));  storageText.Children.Add(path); storage.Children.Add(storageText); settings.Children.Add(storage);
-        _contentHost.Children.Add(Scroll(settings));
-    }
-
-    private void UpdateSettings()
-    {
-        _updatingInputs = true;
-        foreach (var (theme, button) in _themeButtons)
-        {
-            var selected = theme == _snapshot.Theme;
-            button.Content = IconLabel(selected ? AppIcon.Check : theme == ThemePreference.System ? AppIcon.Monitor : theme == ThemePreference.Light ? AppIcon.Sun : AppIcon.Moon, theme.ToString(), 15);
-            AutomationProperties.SetName(button, $"Use {theme.ToString().ToLowerInvariant()} theme{(selected ? " (selected)" : "")}");
-            button.SetResourceReference(Control.BackgroundProperty, theme == _snapshot.Theme ? "AccentSoftBrush" : "CardBrush");
-            button.SetResourceReference(Control.BorderBrushProperty, theme == _snapshot.Theme ? "AccentBrush" : "BorderBrush");
-        }
-        if (_pathSetting is not null) { _pathSetting.IsChecked = _snapshot.PathIntegrationEnabled; _pathSetting.IsEnabled = !Busy && _snapshot.PhpInstallations.Count > 0; }
-        if (_startupSetting is not null)
-        {
-            _startupSetting.IsChecked = _startupState?.Enabled == true;
-            _startupSetting.IsEnabled = !Busy && !_startupChanging && _startupState is not null;
-        }
-        if (_startupNotice is not null)
-        {
-            _startupNotice.Text = _startupState?.Notice ?? string.Empty;
-            _startupNotice.Visibility = string.IsNullOrEmpty(_startupNotice.Text) ? Visibility.Collapsed : Visibility.Visible;
-        }
-        if (_defaultPhpPicker is not null) { _defaultPhpPicker.SelectedItem = _snapshot.DefaultPhpChannel; _defaultPhpPicker.IsEnabled = !Busy; }
-        _updatingInputs = false;
-    }
-
-    private async Task ReadStartupSettingAsync()
-    {
-        try
-        {
-            var state = await _startupRegistration.ReadAsync();
-            if (!_startupChanging) _startupState = state;
-        }
-        catch (Exception exception) { _startupState = null; _error = "Could not read Windows startup settings. " + exception.Message; }
-        if (!_shutdown) Render(_manager.Snapshot);
-    }
-
-    internal async Task PrepareSmokeSectionAsync(string section, bool checkReleases = false)
-    {
-        SetSmokeSection(section);
-        if (section is "Mail Trap" or "Logs") { await _pageRefresher.RefreshNowAsync(); await _pageRefresher.RefreshNowAsync(); }
-        else if (section == "Updates" && checkReleases) await CheckReleasesAsync();
-    }
-
-    internal Task PreparePhpUpdatesForSmokeAsync(string channel) => OpenPhpUpdatesAsync(channel);
-
-    internal void SetMailSearchForSmoke(string query)
-    {
-        if (_mailSearch is null) throw new InvalidOperationException("Open a nonempty running inbox before testing search.");
-        _mailSearch.Text = query;
-    }
-
-    private async Task NavigateAsync(string section)
-    {
-        if (section != "Updates") CancelReleaseCheck();
-        _feedbackMessage = null; _section = section; Render(_snapshot);
-        try { await _manager.SetLastSectionAsync(section, _lifetime.Token); }
-        catch (Exception exception) { ShowError(exception.Message); }
-        if (section is "Mail Trap" or "Logs") await _pageRefresher.RefreshNowAsync();
-        if (_section == "Updates" && section == "Updates" && !_releaseCheckComplete) await CheckReleasesAsync();
-    }
+    internal OperationTracker TrackedOperations => _operationTracker;
+    internal IReadOnlyList<NotificationMessage> NotificationHistory => _notifications.History;
 
     private async Task OpenInstallAsync(ServiceKind kind)
     {
@@ -994,6 +227,7 @@ internal sealed partial class ManagerWindow : Window
     {
         if (_releaseCheck is not null || _section != "Updates" || _shutdown) return;
         using var lookup = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        using var operation = _operationTracker.Begin($"Fetching {ReleaseTypeName()} releases", lookup.Cancel, CheckReleasesAsync, quiet: true);
         _releaseCheck = lookup;
         var kind = _releaseKind;
         var channel = _releasePhpChannel;
@@ -1009,18 +243,19 @@ internal sealed partial class ManagerWindow : Window
                 : releases;
             _releaseCheckComplete = true;
             if (!_releases.Any(release => release.Id == _selectedReleaseId)) _selectedReleaseId = _releases.FirstOrDefault()?.Id;
+            operation.Complete();
         }
-        catch (OperationCanceledException) when (lookup.IsCancellationRequested) { }
+        catch (OperationCanceledException error) when (lookup.IsCancellationRequested) { operation.Fail(error); }
         catch (OperationCanceledException) when (_releaseCheck == lookup)
         {
-            _releaseCheckComplete = true;
-            _releaseError = "The publisher took too long to respond. Retry the release check or import an extracted runtime.";
+            operation.Fail(new OperationCanceledException());
         }
         catch (Exception exception)
         {
             if (_releaseCheck != lookup) return;
             _releaseCheckComplete = true;
             _releaseError = $"Could not read the publisher's release list. Check your network connection and retry, or import an extracted official runtime. {exception.Message}";
+            operation.Fail(new InvalidOperationException(_releaseError, exception)); ShowError(_releaseError);
         }
         finally
         {
@@ -1037,6 +272,7 @@ internal sealed partial class ManagerWindow : Window
         if (InstallationBlockReason(release) is { } reason) throw new InvalidOperationException(reason);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _installCancellation = cancellation;
+        _operationTracker.ConfigureCurrent(cancellation.Cancel, () => InstallSelectedReleaseAsync(release, installVisualCpp));
         _visualCppRetryId = null;
         _releaseError = null;
         _installProgress = new RuntimeInstallProgress("Preparing download…");
@@ -1046,15 +282,8 @@ internal sealed partial class ManagerWindow : Window
             var progress = new Progress<RuntimeInstallProgress>(update =>
             {
                 if (!ReferenceEquals(_installCancellation, cancellation)) return;
-                var phaseChanged = update.Phase != _installProgress?.Phase;
                 _installProgress = update;
-                if (_shutdown) return;
-                var now = Environment.TickCount64;
-                if (phaseChanged || now - _lastProgressRender >= 100)
-                {
-                    _lastProgressRender = now;
-                    Render(_manager.Snapshot);
-                }
+                _foregroundOperation?.Report(update.Phase, update.TotalBytes is > 0 ? update.BytesReceived / (double)update.TotalBytes.Value : null);
             });
             if (installVisualCpp)
             {
@@ -1071,12 +300,15 @@ internal sealed partial class ManagerWindow : Window
             _installProgress = new RuntimeInstallProgress($"Installed {release.DisplayName}", _installProgress?.BytesReceived ?? 0, _installProgress?.TotalBytes);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-        { _installProgress = new RuntimeInstallProgress("Installation cancelled. Any completed registration is shown in the runtime list."); }
+        { throw; }
         catch (Exception exception)
         {
             _visualCppRetryId = exception is VisualCppRuntimeException || installVisualCpp ? release.Id : null;
             _releaseError = _visualCppRetryId is not null ? exception.Message : $"Installation failed: {exception.Message} Retry the official download or import an extracted distribution.";
             _installProgress = new RuntimeInstallProgress("Installation failed");
+            var needsVisualCpp = _visualCppRetryId is not null;
+            _operationTracker.ConfigureCurrent(retry: () => InstallSelectedReleaseAsync(release, needsVisualCpp));
+            throw;
         }
         finally { _installCancellation = null; }
     });
@@ -1086,7 +318,7 @@ internal sealed partial class ManagerWindow : Window
         if (release.Kind == ServiceKind.Php)
         {
             if (InstalledPhpFor(release) is { } installed && installed.Version == PhpPatch(release.Version))
-                return $"PHP {installed.Version} is already active for this channel.";
+                return "This release is already active for this channel.";
             if (RetainedPhpFor(release) is not null) return null;
         }
         else if (HasInstallationFor(release))
@@ -1109,7 +341,8 @@ internal sealed partial class ManagerWindow : Window
         await _manager.ActivatePhpVersionAsync(version.Channel, version.Version, _lifetime.Token);
     });
 
-    private string InstallActionLabel(RuntimeRelease release) => RetainedPhpFor(release) is { } retained ? $"Switch to PHP {retained.Version}" : InstalledPhpFor(release) is { } installed
+    private string InstallActionLabel(RuntimeRelease release) => InstalledPhpFor(release)?.Version == PhpPatch(release.Version) ? "Already active"
+        : RetainedPhpFor(release) is { } retained ? $"Switch to PHP {retained.Version}" : InstalledPhpFor(release) is { } installed
         ? $"{(ParsePhpVersion(release.Version) > ParsePhpVersion(installed.Version) ? "Update" : "Switch")} PHP {installed.Channel}"
         : "Download and install";
 
@@ -1168,12 +401,12 @@ internal sealed partial class ManagerWindow : Window
             }
             else
             {
+                if (_manager.Activity is not null) { UpdateLogOutput(); return; }
                 var lines = await _manager.GetLogLinesAsync(token);
                 if (token.IsCancellationRequested || !IsVisible || _section != page || Busy) return;
                 if (!_logLines.SequenceEqual(lines)) _logLines = lines;
             }
             if (token.IsCancellationRequested || !IsVisible || _section != page) return;
-            if (_autoRefreshError is not null && _error == _autoRefreshError) _error = null;
             _autoRefreshError = null;
             Render(_manager.Snapshot);
         }
@@ -1184,7 +417,7 @@ internal sealed partial class ManagerWindow : Window
             if (_autoRefreshError != exception.Message)
             {
                 _autoRefreshError = exception.Message;
-                if (_error is null) ShowError(exception.Message);
+                ShowError(exception.Message);
             }
         }
     }
@@ -1204,30 +437,19 @@ internal sealed partial class ManagerWindow : Window
         _pageActions.Children.Add(updates);
     }
 
-    private void UpdateLogOutput()
+    private void UpdateLogOutput(bool force = false)
     {
-        if (_logOutput is null || ReferenceEquals(_logOutput.Tag, _logLines) || _logOutput.SelectionLength > 0) return;
-        var offset = _logOutput.VerticalOffset;
-        var caret = _logOutput.CaretIndex;
-        _logOutput.Text = _logLines.Count == 0 ? "No activity recorded yet." : string.Join(Environment.NewLine, _logLines.Select(ReadableLogLine));
-        _logOutput.Tag = _logLines;
-        _logOutput.CaretIndex = Math.Min(caret, _logOutput.Text.Length);
-        _logOutput.ScrollToVerticalOffset(offset);
-    }
-
-    internal static string ReadableLogLine(string line)
-    {
-        try
-        {
-            using var json = System.Text.Json.JsonDocument.Parse(line);
-            var record = json.RootElement;
-            if (record.ValueKind != System.Text.Json.JsonValueKind.Object || !record.TryGetProperty("message", out var message) || message.ValueKind != System.Text.Json.JsonValueKind.String) return line;
-            var time = record.TryGetProperty("timestamp", out var timestamp) && timestamp.ValueKind == System.Text.Json.JsonValueKind.String && timestamp.TryGetDateTimeOffset(out var date)
-                ? date.ToLocalTime().ToString("G") : string.Empty;
-            var level = record.TryGetProperty("level", out var severity) && severity.ValueKind == System.Text.Json.JsonValueKind.String ? severity.GetString() : string.Empty;
-            return $"{time}  {level}{Environment.NewLine}{message.GetString()}{Environment.NewLine}";
-        }
-        catch (System.Text.Json.JsonException) { return line; }
+        if (_updatesPaused && !force) return;
+        if (_logOutput is null) return;
+        if (_manager.Activity is null) { _logOutput.UpdateLines(_logLines); UpdateActivityServices(_logOutput.Services); return; }
+        var today = DateTime.Today;
+        var culture = System.Globalization.CultureInfo.CurrentCulture.Name;
+        if (_activityVersion == _activity.Version && _activityDate == today && _activityCulture == culture) return;
+        _activityVersion = _activity.Version;
+        _activityDate = today; _activityCulture = culture;
+        var snapshot = _activity.Snapshot;
+        UpdateActivityServices(snapshot.Select(entry => entry.Service));
+        _logOutput.UpdateEntries(snapshot);
     }
 
     private static ScrollViewer? FindScrollViewer(DependencyObject parent)
@@ -1242,19 +464,20 @@ internal sealed partial class ManagerWindow : Window
     {
         if (_operation is not null || _shutdown) return;
         _operation = label;
-        _feedbackMessage = null;
-        _error = null;
         Render(_manager.Snapshot);
-        try { await action(); }
-        catch (Exception exception) { _error = exception.Message; }
-        finally { _operation = null; Render(_manager.Snapshot); }
+        using var operation = _operationTracker.Begin(label);
+        _foregroundOperation = operation;
+        try { await action(); operation.Complete(); _notifications.Publish("Completed", label, NotificationSeverity.Success); }
+        catch (OperationCanceledException) { operation.Fail(new OperationCanceledException()); }
+        catch (Exception exception) { operation.Fail(exception); ShowError(exception.Message); }
+        finally { _foregroundOperation = null; _operation = null; Render(_manager.Snapshot); }
     }
 
-    public void ShowError(string message) { _error = message; Render(_manager.Snapshot); }
+    public void ShowError(string message) => _notifications.Publish("Operation failed", message, NotificationSeverity.Error);
     public void BeginShutdown()
     {
         _shutdown = true;
-        _pageRefresher.Dispose();
+        _pageRefresher.Dispose(); _statusBar.Dispose(); _notifications.Published -= OnNotification;
         CancelReleaseCheck();
         _lifetime.Cancel();
         _installCancellation?.Cancel();
@@ -1397,10 +620,14 @@ internal sealed partial class ManagerWindow : Window
 
     private UIElement InlineNotice(string text, string? action = null, Func<Task>? handler = null)
     {
-        var row = new DockPanel();
-        if (action is not null && handler is not null) { var button = ActionButton(action, handler, "QuietButtonStyle"); DockPanel.SetDock(button, Dock.Right); row.Children.Add(button); }
-        var description = T(text, 12, muted: true); description.VerticalAlignment = VerticalAlignment.Center; row.Children.Add(description);
-        var surface = Surface(row, "HoverBrush", 8, new Thickness(11)); surface.Margin = new Thickness(0, 0, 0, 13); return surface;
+        var row = new StackPanel { Margin = new Thickness(0, 0, 0, 16) };
+        row.Children.Add(new Wpf.Ui.Controls.InfoBar { Message = text, IsOpen = true, IsClosable = false });
+        if (action is not null && handler is not null)
+        {
+            var button = ActionButton(action, handler, "SecondaryButtonStyle");
+            button.Margin = new Thickness(0, 8, 0, 0); row.Children.Add(button);
+        }
+        return row;
     }
 
     private static Border Badge(string label, string background, Thickness margin)
@@ -1408,19 +635,19 @@ internal sealed partial class ManagerWindow : Window
         var badge = new Border { Child = T(label, 9), CornerRadius = new CornerRadius(4), Padding = new Thickness(6, 3, 6, 3), Margin = margin, VerticalAlignment = VerticalAlignment.Center };
         badge.SetResourceReference(Border.BackgroundProperty, background); return badge;
     }
-    private static Border RowSurface(UIElement content) { var row = Surface(content, "CardBrush", 9, new Thickness(13, 13, 9, 13)); row.Margin = new Thickness(0, 0, 0, 9); return row; }
-    private static Border Surface(UIElement content, string background, double radius, Thickness padding)
+    private static Wpf.Ui.Controls.Card RowSurface(UIElement content) { var row = Surface(content, "CardBrush", 9, new Thickness(13, 13, 9, 13)); row.Margin = new Thickness(0, 0, 0, 9); return row; }
+    private static Wpf.Ui.Controls.Card Surface(UIElement content, string background, double radius, Thickness padding)
     {
-        var border = new Border { Child = content, CornerRadius = new CornerRadius(radius), Padding = padding, BorderThickness = new Thickness(1) };
-        border.SetResourceReference(Border.BackgroundProperty, background); border.SetResourceReference(Border.BorderBrushProperty, "BorderBrush"); return border;
+        var border = new Wpf.Ui.Controls.Card { Content = content, Padding = padding, BorderThickness = new Thickness(1), HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
+        border.SetResourceReference(Control.BackgroundProperty, background); border.SetResourceReference(Control.BorderBrushProperty, "BorderBrush"); return border;
     }
     private static ScrollViewer Scroll(UIElement content) => new() { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Padding = new Thickness(0, 0, 3, 4) };
     private static TextBlock T(string text, double size = 13, bool bold = false, bool muted = false, Thickness? margin = null)
     {
-        var block = new TextBlock { Text = text, FontSize = size, FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal, TextWrapping = TextWrapping.Wrap, Margin = margin ?? new Thickness(0) };
+        var block = new TextBlock { Text = text, FontSize = Math.Max(12, size), FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal, TextWrapping = TextWrapping.Wrap, Margin = margin ?? new Thickness(0) };
         block.SetResourceReference(TextBlock.ForegroundProperty, muted ? "MutedBrush" : "TextBrush"); return block;
     }
-    private sealed record PhpRow(PhpInstallation Installation, TextBlock Status, Button Toggle);
+    private sealed record PhpRow(string Id, TextBlock Status, Button Toggle, TextBlock Metadata, Border Default);
     private sealed record InlineService(string Title, TextBlock Status);
     private sealed class Scope(Action dispose) : IDisposable { public void Dispose() => dispose(); }
 }
