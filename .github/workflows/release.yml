@@ -1,4 +1,4 @@
-name: Prepare Microsoft Store submission
+name: Release to Microsoft Store
 
 on:
   push:
@@ -9,12 +9,17 @@ on:
         description: Existing version tag to package (for example v0.8.0-preview)
         required: true
         type: string
+      publish:
+        description: Submit to Store (requires first publication and configured credentials)
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: store-${{ inputs.tag || github.ref_name }}
+  group: store-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -64,3 +69,63 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+      - name: Check automatic submission configuration
+        id: store_config
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_PUBLISH: ${{ inputs.publish }}
+          STORE_AUTOPUBLISH: ${{ vars.STORE_AUTOPUBLISH }}
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+          PARTNER_CENTER_TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          PARTNER_CENTER_SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          PARTNER_CENTER_CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          PARTNER_CENTER_CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+        run: |
+          $requested = if ($env:EVENT_NAME -eq 'workflow_dispatch') {
+            $env:MANUAL_PUBLISH -eq 'true'
+          } else {
+            $env:STORE_AUTOPUBLISH -eq 'true'
+          }
+          if (-not $requested) {
+            'enabled=false' >> $env:GITHUB_OUTPUT
+            '### Store package ready' >> $env:GITHUB_STEP_SUMMARY
+            'Automatic submission is disabled. Download the microsoft-store-submission artifact for manual upload. After the first Store publication, configure the store environment as described in docs/RELEASING.md.' >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          foreach ($name in @('STORE_PRODUCT_ID', 'PARTNER_CENTER_TENANT_ID', 'PARTNER_CENTER_SELLER_ID', 'PARTNER_CENTER_CLIENT_ID', 'PARTNER_CENTER_CLIENT_SECRET')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Automatic submission was requested but $name is missing from the store environment. See docs/RELEASING.md."
+            }
+          }
+          'enabled=true' >> $env:GITHUB_OUTPUT
+      - name: Install Microsoft Store Developer CLI
+        if: steps.store_config.outputs.enabled == 'true'
+        id: store_cli
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+        with:
+          version: v0.4.4
+      - name: Submit package to Microsoft Store
+        if: steps.store_config.outputs.enabled == 'true'
+        env:
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+          STORE_FLIGHT_ID: ${{ vars.STORE_FLIGHT_ID }}
+          PARTNER_CENTER_TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          PARTNER_CENTER_SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          PARTNER_CENTER_CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          PARTNER_CENTER_CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/store -Filter '*.msix' -File)
+          if ($packages.Count -ne 1) { throw 'Expected exactly one Store MSIX package.' }
+          & msstore reconfigure --tenantId $env:PARTNER_CENTER_TENANT_ID --sellerId $env:PARTNER_CENTER_SELLER_ID --clientId $env:PARTNER_CENTER_CLIENT_ID --clientSecret $env:PARTNER_CENTER_CLIENT_SECRET
+          if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store authentication configuration failed.' }
+          $arguments = @('publish', $packages[0].FullName, '--appId', $env:STORE_PRODUCT_ID)
+          if (-not [string]::IsNullOrWhiteSpace($env:STORE_FLIGHT_ID)) { $arguments += @('--flightId', $env:STORE_FLIGHT_ID) }
+          & msstore @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store submission failed. Check the CLI output and Partner Center.' }
+          '### Package submitted to Microsoft Store' >> $env:GITHUB_STEP_SUMMARY
+          'The package was submitted using the configured Store audience or flight. Certification and publication status remain available in Partner Center.' >> $env:GITHUB_STEP_SUMMARY
+      - name: Clear Store credentials from the runner
+        if: always() && steps.store_cli.outcome == 'success'
+        run: |
+          & msstore reconfigure --reset
+          if ($LASTEXITCODE -ne 0) { throw 'Could not clear the temporary Store CLI credentials.' }

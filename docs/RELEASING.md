@@ -1,12 +1,12 @@
 # Microsoft Store releases
 
-PHP DevTray is packaged as a self-contained Windows x64 MSIX for submission to Microsoft Store. Microsoft signs the package after certification and distributes app updates. No SignPath account, signing certificate, installer hosting, or WinGet submission is used. This repository prepares an upload artifact; it does not automatically submit or publish in Partner Center.
+PHP DevTray is packaged as a self-contained Windows x64 MSIX for submission to Microsoft Store. Microsoft signs the package after certification and distributes app updates. No SignPath account, signing certificate, installer hosting, or WinGet submission is used. Release tags always prepare a downloadable upload artifact; once configured, the same workflow automatically submits updates using Microsoft's Store Developer CLI.
 
 ## One-time setup
 
 1. Register a [Microsoft Store developer account](https://developer.microsoft.com/microsoft-store/register/) and reserve the app name in Partner Center. Choose the **MSIX/AppX** submission route. The MSI/EXE route still requires publisher-managed signing and is not used here.
 2. The reserved app identity is already recorded in `packaging/AppxManifest.xml`: package name `LilianMoulanier.PHPDevTray`, publisher `CN=737AB8E3-B8A7-4EB3-B41A-E15E782D42DB`, and publisher display name `Lilian Moulanier`. These are public identifiers. Keep them consistent with **Product management > Product identity** in Partner Center.
-3. Create a GitHub Actions environment named **store**. Restrict deployment refs to release tags (`v*`) and configure reviewers if desired. No variables or secrets are required with the committed identity. The workflow also supports these optional environment variables to override it:
+3. Create a GitHub Actions environment named **store**. Allow release tags (`v*`); also allow `main` if you want to dispatch the workflow from `main` with an existing tag. Configure reviewers if desired. Package-only runs need no variables or secrets with the committed identity. The workflow supports these optional environment variables to override it:
 
 | Variable | Partner Center value |
 | --- | --- |
@@ -16,6 +16,33 @@ PHP DevTray is packaged as a self-contained Windows x64 MSIX for submission to M
 
 No Store API credentials are needed for the manual upload flow. Old `release` environment secrets and variables used for SignPath and WinGet can be removed from GitHub separately; deleting the workflows does not delete server-side configuration.
 
+## Enable automatic Store updates
+
+Complete the app's **first publication through Partner Center** before enabling this. Microsoft requires the app to be live before the CLI can publish updates. Configure the Entra ID application in Partner Center with the **Manager** role, following Microsoft's [Store CLI prerequisites](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/overview) and [GitHub Actions setup](https://learn.microsoft.com/windows/apps/publish/msstore-dev-cli/github-actions).
+
+Add these **secrets** to the GitHub **store** environment (do not put their values in source files or workflow inputs):
+
+| Secret | Value |
+| --- | --- |
+| `PARTNER_CENTER_TENANT_ID` | Microsoft Entra tenant ID associated with Partner Center |
+| `PARTNER_CENTER_SELLER_ID` | Partner Center seller/publisher account ID |
+| `PARTNER_CENTER_CLIENT_ID` | Entra application/client ID with Partner Center access |
+| `PARTNER_CENTER_CLIENT_SECRET` | That application's client secret; renew it before it expires |
+
+Add these **environment variables**:
+
+| Variable | Value |
+| --- | --- |
+| `STORE_PRODUCT_ID` | Store product ID from Partner Center, such as `9N…`; this is not the MSIX package name or publisher GUID |
+| `STORE_AUTOPUBLISH` | `true` to submit every matching release-tag push automatically; otherwise tags only build the artifact |
+| `STORE_FLIGHT_ID` | Optional existing package-flight ID; leave unset to use the app's existing Store audience |
+
+The workflow pins the Microsoft publisher action and CLI version, preserves the app's existing pricing, submits the one freshly built MSIX, and clears CLI credentials from the runner afterwards. A shared concurrency group serializes releases so two tags cannot submit simultaneously. Missing required configuration fails an explicitly requested submission after preserving the downloadable package artifact.
+
+Manual runs have a **publish** checkbox, defaulting to **false**. Checking it submits that tag once, even if `STORE_AUTOPUBLISH` is disabled; leaving it unchecked remains package-only even when tag auto-publishing is enabled. Select the workflow from `main` to use the newest automation with an existing source tag. Do not resubmit an already released Store package version; bump `StorePackageVersion` and create a new matching app-version tag for updates.
+
+Successful CLI submission means the package has been submitted for Microsoft processing, not necessarily that certification or rollout has completed. Check Partner Center for the final publication state. This workflow updates packages; it does not overwrite the Store listing, screenshots, age ratings, or pricing.
+
 ## Versioning
 
 `Directory.Build.props` contains two related versions:
@@ -23,15 +50,15 @@ No Store API credentials are needed for the manual upload flow. Old `release` en
 - `Version` and `InformationalVersion` describe the app, currently `0.8.0` / `0.8.0-preview`. The Git tag must match `v` plus `InformationalVersion` without build metadata: currently `v0.8.0-preview`.
 - `StorePackageVersion` is the four-part numeric MSIX identity version, currently `1.0.1.0`. Its first part must be nonzero; its fourth part must stay `0` for Store use. Increment this version for each new package version sent to the Store, including previews. The Store version does not mean the app has reached feature version 1.0.
 
-Preview suffixes cannot be encoded in an MSIX identity version. Use a private audience/package flight in Partner Center to test a preview before public availability; a `-preview` Git tag by itself does not create a private Store release. The workflow only builds the package.
+Preview suffixes cannot be encoded in an MSIX identity version. Use a private audience/package flight in Partner Center to test a preview before public availability; a `-preview` Git tag by itself does not create a private Store release. When automatic submission is enabled, configure `STORE_FLIGHT_ID` for an existing flight if that is the intended preview destination.
 
 ## Build and submit
 
-1. Set the versions, commit and push, then push a matching release tag, or manually run **Prepare Microsoft Store submission** with an existing tag.
+1. Set the versions, commit and push, then push a matching release tag, or manually run **Release to Microsoft Store** from `main` with an existing tag. Select **publish** only when you intend to submit that package.
 2. The workflow uses a GitHub-hosted `windows-2025` runner, the SDK selected by `global.json`, and the runner's Windows SDK `MakeAppx.exe`. It builds the app, runs the existing checks, publishes both the WPF app and CLI self-contained, validates the source/payload version, generates icons and the manifest, and packages with MakeAppx validation enabled.
-3. Download the **microsoft-store-submission** workflow artifact. Upload its `.msix` to the app's **Packages** page in Partner Center. The checksum and JSON identity summary are for verification and are not uploaded as packages.
+3. If automatic submission is configured/requested, the workflow authenticates with the Store CLI and submits the MSIX to the configured app or flight. Otherwise, download the **microsoft-store-submission** workflow artifact and upload its `.msix` to the app's **Packages** page in Partner Center. The checksum and JSON identity summary are for verification and are not uploaded as packages.
 4. Complete the listing, screenshots, privacy policy, support information, age ratings, pricing/availability and certification notes in Partner Center. Set the intended audience/release schedule, then submit for certification. Microsoft signs accepted MSIX packages; do not upload the old Inno Setup EXE or a development-identity package.
-5. Customers install and update through Microsoft Store after approval/publication. GitHub Actions success means the upload artifact is ready, not that the app is live.
+5. Customers install and update through Microsoft Store after approval/publication. The workflow summary distinguishes package-only runs from submitted packages; GitHub Actions success does not guarantee the app is live yet.
 
 Branch pushes and pull requests run **Build Microsoft Store package**, using a clearly marked development identity and no Store configuration. Its **development-msix** artifact is only for packaging verification; it cannot be submitted as this app's Store package.
 
