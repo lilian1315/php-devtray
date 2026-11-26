@@ -506,12 +506,7 @@ internal sealed partial class ManagerWindow : Wpf.Ui.Controls.FluentWindow
     private Task OpenEditorAsync(string path)
     {
         if (!File.Exists(path)) throw new FileNotFoundException("This configuration file has not been created yet. Add the runtime first.", path);
-        _ignoreDeactivationUntil = Environment.TickCount64 + 1500;
-        var command = new ProcessStartInfo("notepad.exe") { UseShellExecute = false };
-        command.ArgumentList.Add(path);
-        try { Process.Start(command); }
-        catch { _ignoreDeactivationUntil = 0; throw; }
-        return Task.CompletedTask;
+        return OpenPathAsync(path);
     }
 
 
