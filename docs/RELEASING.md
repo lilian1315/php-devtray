@@ -37,7 +37,9 @@ Add these **environment variables**:
 | `STORE_AUTOPUBLISH` | `true` to submit every matching release-tag push automatically; otherwise tags only build the artifact |
 | `STORE_FLIGHT_ID` | Optional existing package-flight ID; leave unset to use the app's existing Store audience |
 
-The workflow pins the Microsoft publisher action and CLI version, preserves the app's existing pricing, submits the one freshly built MSIX, and clears CLI credentials from the runner afterwards. A shared concurrency group serializes releases so two tags cannot submit simultaneously. Missing required configuration fails an explicitly requested submission after preserving the downloadable package artifact.
+The workflow pins the Microsoft publisher action and CLI version, preserves the app's existing pricing, and submits the one freshly built MSIX. Credentials remain on the disposable GitHub-hosted Windows VM, which GitHub decommissions after the job. The CLI's `reconfigure --reset` command requires interactive confirmation and is intentionally not used in this unattended workflow. A shared concurrency group serializes releases so two tags cannot submit simultaneously. Missing required configuration fails an explicitly requested submission after preserving the downloadable package artifact.
+
+If an older workflow reports **Submission commit success** followed by **Could not clear the temporary Store CLI credentials**, the package was already submitted. Check its certification status in Partner Center; do not publish the same package again just to retry cleanup. The cleanup error does not roll back the Store submission.
 
 If the CLI fails in `RetrieveSellerId` with `System.FormatException`, correct `PARTNER_CENTER_SELLER_ID` in the GitHub **store** environment. GitHub replaces secret values with `***` in logs; that masking does not mean the CLI received literal asterisks. The workflow validates the numeric format before invoking the CLI. Run **Release to Microsoft Store** from `main` with the original tag and **publish** checked to retry with the corrected workflow; rerunning an old failed job uses its original workflow revision.
 

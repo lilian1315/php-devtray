@@ -24,6 +24,7 @@ concurrency:
 
 jobs:
   package:
+    # Credentials stay on this disposable GitHub-hosted VM, which is destroyed after the job.
     runs-on: windows-2025
     environment: store
     timeout-minutes: 30
@@ -135,8 +136,3 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store submission failed. Check the CLI output and Partner Center.' }
           '### Package submitted to Microsoft Store' >> $env:GITHUB_STEP_SUMMARY
           'The package was submitted using the configured Store audience or flight. Certification and publication status remain available in Partner Center.' >> $env:GITHUB_STEP_SUMMARY
-      - name: Clear Store credentials from the runner
-        if: always() && steps.store_cli.outcome == 'success'
-        run: |
-          & msstore reconfigure --reset
-          if ($LASTEXITCODE -ne 0) { throw 'Could not clear the temporary Store CLI credentials.' }
