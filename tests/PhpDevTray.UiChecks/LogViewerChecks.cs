@@ -1,5 +1,9 @@
 using System.Globalization;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Navigation;
+using System.Windows.Threading;
 using PhpDevTray.App;
 using PhpDevTray.Core;
 
@@ -8,6 +12,7 @@ internal static class LogViewerChecks
     public static void Run()
     {
         CheckLocalizedTimestamps();
+        CheckLinkNavigation();
         var buffer = new ActivityBuffer();
         buffer.Append("php", "first line"); buffer.Append("caddy", "second line");
         var viewer = new LogViewer(); viewer.UpdateEntries(buffer.Snapshot);
@@ -32,6 +37,32 @@ internal static class LogViewerChecks
         Require(viewer.SelectedText == "diagnostic", "The persistent search input must use AvalonEdit's matching and navigation.");
         viewer.Search("");
         Console.WriteLine("PASS: native multiline selection, held streaming updates, incremental document, service filtering, search, clearing and ANSI spans.");
+    }
+    private static void CheckLinkNavigation()
+    {
+        var viewer = new LogViewer();
+        var requestedLinks = new List<Uri>();
+        viewer.LinkRequested += (_, uri) => requestedLinks.Add(uri);
+        var page = new Page { Content = viewer };
+        var frame = new Frame { Content = page };
+        var window = new Window { Content = frame, Width = 700, Height = 300, Left = -20000, Top = -20000, ShowActivated = false, ShowInTaskbar = false };
+        window.Show();
+        try
+        {
+            frame.Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+            frame.Measure(new Size(700, 300)); frame.Arrange(new Rect(0, 0, 700, 300)); frame.UpdateLayout();
+            var navigated = false;
+            frame.Navigating += (_, args) => { navigated = true; args.Cancel = true; };
+            var request = new RequestNavigateEventArgs(new Uri("https://example.test/"), null)
+            { RoutedEvent = Hyperlink.RequestNavigateEvent };
+            viewer.TextArea.TextView.RaiseEvent(request);
+            Require(!navigated, "Activity links must not navigate the containing application frame away from its page.");
+            Require(request.Handled, "Activity must handle external links before they reach WPF navigation.");
+            Require(requestedLinks.SequenceEqual(new[] { request.Uri }), "The Activity link must be forwarded exactly once to the external opener.");
+            Require(ReferenceEquals(frame.Content, page) && ReferenceEquals(page.Content, viewer), "Opening a link must preserve the Activity page.");
+            Console.WriteLine("PASS: Activity links do not navigate away from the application page.");
+        }
+        finally { window.Close(); }
     }
     private static void CheckLocalizedTimestamps()
     {

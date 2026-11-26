@@ -2,7 +2,9 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Navigation;
 using System.Windows.Threading;
 using ICSharpCode.AvalonEdit;
 using ICSharpCode.AvalonEdit.Document;
@@ -25,6 +27,7 @@ internal sealed partial class LogViewer : TextEditor
     private string? _filter;
     private int _tailUpdate;
     public event EventHandler? SearchRequested;
+    public event EventHandler<Uri>? LinkRequested;
     public IEnumerable<string> Services => _latest.Select(entry => entry.Service).Distinct();
 
     public LogViewer()
@@ -36,6 +39,12 @@ internal sealed partial class LogViewer : TextEditor
         VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto;
         SetResourceReference(BackgroundProperty, "CardBrush"); SetResourceReference(ForegroundProperty, "TextBrush");
         AutomationProperties.SetName(this, "Recent application log");
+        // Keep external links out of the containing page's WPF navigation frame.
+        AddHandler(Hyperlink.RequestNavigateEvent, new RequestNavigateEventHandler((_, args) =>
+        {
+            args.Handled = true;
+            LinkRequested?.Invoke(this, args.Uri);
+        }));
         _search = SearchPanel.Install(this);
         // AvalonEdit owns matching and highlighting; the page owns the persistent search input.
         _search.Visibility = Visibility.Collapsed;

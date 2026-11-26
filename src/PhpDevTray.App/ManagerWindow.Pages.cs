@@ -217,6 +217,11 @@ internal sealed partial class ManagerWindow
         Grid.SetColumn(searchActions, 1); searchRow.Children.Add(searchActions);
         DockPanel.SetDock(searchRow, Dock.Top); panel.Children.Add(searchRow);
         _logOutput = new LogViewer(); panel.Children.Add(_logOutput); _activityVersion = -1;
+        _logOutput.LinkRequested += async (_, uri) =>
+        {
+            try { await OpenPathAsync(uri.AbsoluteUri); }
+            catch (Exception exception) { ShowError(exception.Message); }
+        };
         _logOutput.SearchRequested += (_, _) => { _activitySearch.Focus(); _activitySearch.SelectAll(); };
         _contentHost.Children.Add(panel); UpdateLogOutput();
     }
